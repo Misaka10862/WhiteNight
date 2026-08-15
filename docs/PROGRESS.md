@@ -103,8 +103,9 @@
 
 ## 问题记录（未解决）
 
-1. **GitHub push 被拒**：OAuth 凭据缺 `workflow` scope，无法推送含 `.github/workflows/ci.yml`
-   的提交。本地提交与 tag 完好。修复：`gh auth refresh -s workflow && git push -u origin main`。
+1. **GitHub push 被拒/不稳定**：OAuth 凭据缺 `workflow` scope（主要阻塞），且直连
+   间歇性 HTTP2 framing 错误/超时。本地提交与 tag 完好。
+   修复：`gh auth refresh -s workflow && git push -u origin main`；网络错误时重试。
 2. **Hermes 任务级验证被阻塞**：Hermes 未登录任何模型 Provider（`hermes status` 全 ✗）。
    需用户执行 `hermes model` / `hermes auth` 登录后跑任务链路契约烟测。
 3. **cua-driver TCC 待授权**：`hermes computer-use doctor` 显示辅助功能与屏幕录制未授予；
