@@ -8,7 +8,7 @@
   阶段 10 核心完成**。
 - 当前运行方案：**临时最小验证**——本机 `qwen3:8b` 文本模型 + `SOUL.md` 预设人格；
   图片消息给出明确“暂不能看图”提示。LoRA 视觉模型为后续正式方案。
-- 测试基线：**135 passed / 4 skipped**；ruff + mypy strict + 前端 eslint/tsc/vite 全绿。
+- 测试基线：**136 passed / 4 skipped**；ruff + mypy strict + 前端 eslint/tsc/vite 全绿。
 - 真实 QQ 链路已打通（NapCat 扫码 + OneBot 上报/发送 + owner 白名单 + 收发闭环实测）。
 - 72 小时持续运行巡检进行中（由 Agent 启动，当前 0 失败）。
 
@@ -25,7 +25,7 @@
 | 后台服务 | launchd 模板、菜单栏入口、泊松主动消息、过期不补发 |
 | QQ | NapCat 真实部署：QQ 小号登录，OneBot 上报（8765）与发送（3000）配置完成，`QQ LINK READY`，直发与事件闭环实测送达 |
 | 备份恢复 | 加密备份 verify/preview/restore 实测；恢复前自动安全备份 |
-| 安全 | 提示注入/SSRF/审批重放/非 owner/附件 MIME/日志脱敏红队覆盖 |
+| 安全 | 提示注入/SSRF/审批重放/非 owner/附件 MIME/日志脱敏红队覆盖；生成强制 `num_predict` 上限防失控占用推理槽 |
 
 ## 尚需用户完成（阻塞点）
 

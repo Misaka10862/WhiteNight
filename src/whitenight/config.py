@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # 临时最小验证方案：LoRA 暂缓，先使用本地 qwen3:8b 文本模型 + SOUL.md 人格。
     model_name: str = "qwen3:8b"
     model_supports_vision: bool = False  # qwen3:8b 无视觉；LoRA 后切回 qwen3-vl 并置 true
+    model_max_output_tokens: int = 2048  # Ollama num_predict 上限，防止退化成无限生成
     ollama_base_url: str = "http://127.0.0.1:11434"
     context_budget_chars: int = 12_000
     max_image_bytes: int = 8 * 1024 * 1024  # 8 MiB

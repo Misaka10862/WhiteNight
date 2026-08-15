@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（Ollama 卡死故障定位并恢复；QQ 链路自检复通）
+最后更新：2026-08-15（Ollama 失控生成根因定位：缺失 num_predict 上限；已修复并实测）
 
 ## 当前阶段
 
@@ -21,12 +21,14 @@
   `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
 - **收尾审计（本轮）**：`scripts/diagnostics.py --json` 全绿（DB integrity/alembic 0007、
   Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
-  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 135 passed / 4 skipped 全绿；
+  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 136 passed / 4 skipped 全绿；
   `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
-- **Ollama 卡死事件（已恢复）**：用户 QQ 消息在 10:40 后无回复；定位为 Ollama
-  `qwen3:8b` 卸载卡在 `Stopping...`，`/api/generate` 全部超时（后端/QQ 均正常）。
-  已 `brew services restart ollama` 恢复；QQ 闭环自检回复「链路正常」。详见问题 12。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 126 checks / 0 failures。
+- **Ollama 失控生成（根因已修复）**：QQ 两次“无回复”都不是内存或 Ollama 假死，
+  而是 qwen3:8b 偶发退化循环——请求未设置 `num_predict`，实测单次生成跑到
+  `n_decoded > 4000` 仍不结束，占住唯一推理槽。修复：Ollama Provider 增加
+  `model_max_output_tokens`（默认 2048）→ `/api/chat` `options.num_predict`；
+  契约测试锁定 payload；真实 QQ 闭环自检回复「上限修复完成」。详见问题 12。
+- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 137 checks / 0 failures。
   期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
 - **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
   DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`
@@ -183,11 +185,16 @@
     以 Fake Provider 做状态机测试。真实短任务烟测（如生成一个 hello.py）留待用户确认后执行。
 11. **WebUI 未做真实浏览器视觉回归**：已通过 tsc/eslint/build、Vite 代理全链路与 API 工作流
     验证；窄窗口/键盘/无障碍需要用户在本机打开 `npm run dev` 做一次人工确认。
-12. ✅ **Ollama 卸载卡死导致 QQ 无回复（2026-08-15 已恢复）**：现象为用户私聊入库但
-    长时间无回复、`ollama ps` 显示 `Stopping...`、`/api/generate` 超时；后端与 NapCat
-    正常。处理：`brew services restart ollama` 后生成与 QQ 闭环自检通过。
-    遗留监测缺口：72h 巡检只测 `/healthz`，不测真实生成，下次模型假死时仍可能漏报；
-    后续可给巡检增加低频生成烟测（待用户确认是否自动重启 Ollama）。
+12. ✅ **Ollama 失控生成导致 QQ 无回复（2026-08-15 已修复）**：两次“不理人”的
+    共同根因不是内存/Ollama 假死，而是模型退化循环：WhiteNight 调 `/api/chat` 未传
+    `num_predict`，Ollama 在 context-shift 下无限续写（日志实测 `n_decoded > 4000`），
+    占住单推理槽，后续消息全部排队；`ollama ps` 的 `Stopping...` 只是 keep_alive
+    到期的误导性显示。修复：`OllamaProvider` 默认 `max_output_tokens=2048` 并写入
+    `options.num_predict`（`src/whitenight/config.py` 可配 `model_max_output_tokens`），
+    新增 `tests/test_ollama_contract.py` 锁定 payload；136 passed / 4 skipped，真实 QQ
+    闭环自检通过。内存实测：16GB 空闲 27%、swap 用 2.4GB，属有压力但非根因。
+    遗留监测缺口：72h 巡检只测 `/healthz`，仍无法区分“能出词但停不下来”；后续可加
+    低频真实生成烟测（待用户确认）。
 
 ## 下一步（收尾清单）
 
