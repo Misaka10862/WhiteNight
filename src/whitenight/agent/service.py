@@ -1,17 +1,19 @@
-"""Agent 循环（阶段 2）：会话持久化 → 上下文装配 → 模型流式 → 落库 → 事件发布。
+"""Agent 循环：会话持久化 → 上下文装配 → 模型流式 → 落库 → 事件发布。
 
 事实保真策略：模型输出原样透传，不做人设改写；人格由 SOUL.md 约束。
-Hermes/Codex 委派、路由与异步记忆提取在阶段 4/5 接入。
+主回复完成后异步提取长期记忆（阶段 4）；Hermes/Codex 委派与路由在阶段 5 接入。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 
 from whitenight.agent.context import build_provider_messages, load_soul
 from whitenight.channels.types import ChatEvent, ChatRequest, MessageKind
 from whitenight.config import Settings
+from whitenight.memory.service import MemoryService
 from whitenight.models.base import ModelChunk, ModelProvider, ProviderMessage
 from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
@@ -22,10 +24,18 @@ logger = logging.getLogger(__name__)
 class ChatService:
     """最小纵向链路：Web/未来渠道 → Agent → Ollama → 回复落库。"""
 
-    def __init__(self, store: SessionStore, provider: ModelProvider, settings: Settings) -> None:
+    def __init__(
+        self,
+        store: SessionStore,
+        provider: ModelProvider,
+        settings: Settings,
+        memory_service: MemoryService | None = None,
+    ) -> None:
         self._store = store
         self._provider = provider
         self._settings = settings
+        self._memory = memory_service
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def provider(self) -> ModelProvider:
@@ -94,6 +104,10 @@ class ChatService:
             content=reply,
             kind="text",
         )
+        if self._memory is not None:
+            task = asyncio.create_task(self._extract_memories(session_id))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
         yield ChatEvent(
             type="done",
             session_id=session_id,
@@ -101,6 +115,15 @@ class ChatService:
             text=reply,
             extra={"user_message_id": user_message.id},
         )
+
+    async def _extract_memories(self, session_id: str) -> None:
+        """主回复后的异步记忆提取；失败只记日志，不影响会话。"""
+        assert self._memory is not None
+        try:
+            history = self._store.list_messages(session_id)
+            await self._memory.extract_and_store(history, session_id)
+        except Exception:
+            logger.exception("异步记忆提取失败 session=%s", session_id)
 
 
 class DummyProvider:
@@ -123,6 +146,7 @@ def create_chat_service(
     store: SessionStore,
     provider: ModelProvider | None,
     settings: Settings,
+    memory_service: MemoryService | None = None,
 ) -> ChatService:
     """Provider 未配置或测试注入时降级为 DummyProvider（开发环境显式选择）。"""
-    return ChatService(store, provider or DummyProvider(), settings)
+    return ChatService(store, provider or DummyProvider(), settings, memory_service)

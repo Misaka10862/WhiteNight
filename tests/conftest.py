@@ -11,8 +11,8 @@ from sqlalchemy import Engine
 from whitenight.agent.service import DummyProvider
 from whitenight.api.app import create_app
 from whitenight.config import Settings
-from whitenight.storage import Base
 from whitenight.storage.engine import build_engine
+from whitenight.storage.migrate import upgrade_to_head
 
 
 @pytest.fixture
@@ -25,13 +25,15 @@ def settings(tmp_path) -> Settings:
         keychain_backend="memory",
         log_level="WARNING",
         auto_migrate=False,
+        memory_extractor="none",
     )
 
 
 @pytest.fixture
 def engine(settings: Settings) -> Iterator[Engine]:
     database_engine = build_engine(str(settings.database_url))
-    Base.metadata.create_all(database_engine)
+    # 走真实迁移，包含 FTS5 虚拟表与触发器（create_all 无法创建这些）。
+    upgrade_to_head(settings)
     yield database_engine
     database_engine.dispose()
 

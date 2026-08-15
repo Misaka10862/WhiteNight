@@ -41,13 +41,15 @@ class Settings(BaseSettings):
     keychain_backend: Literal["macos", "memory"] = "macos"
     keychain_service: str = "com.whitenight.credentials"
 
-    # 模型与上下文（阶段 2 最小纵向链路）
+    # 模型与上下文（阶段 2 最小纵向链路；阶段 4 记忆）
     model_name: str = "qwen3-vl:8b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     context_budget_chars: int = 12_000
     max_image_bytes: int = 8 * 1024 * 1024  # 8 MiB
     soul_file: Path = Field(default=Path("SOUL.md"))
     auto_migrate: bool = True
+    memory_extractor: Literal["ollama", "rules", "none"] = "ollama"
+    embedding_model: str = ""  # 为空则仅词法检索；小模型按需加载
 
     def ensure_dirs(self) -> None:
         """创建运行时目录（数据、日志、备份）。"""

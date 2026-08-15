@@ -129,3 +129,62 @@ class AuditEvent(Base):
     session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     channel: Mapped[str | None] = mapped_column(String(16), nullable=True)
     approval_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class ProfileFact(Base):
+    """结构化档案：称呼、偏好、作息、重要日期和稳定事实。"""
+
+    __tablename__ = "profile_facts"
+    __table_args__ = (Index("ix_profile_facts_key", "key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    key: Mapped[str] = mapped_column(String(200), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
+    source_message_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", nullable=False
+    )  # active|superseded|deleted
+    conflict_state: Mapped[str] = mapped_column(
+        String(16), default="none", nullable=False
+    )  # none|conflicted|resolved
+    superseded_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class EpisodicMemory(Base):
+    """情景记忆：重要事件、承诺、共同经历、趣事和情绪变化。"""
+
+    __tablename__ = "episodic_memories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_message_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
+    importance: Mapped[float] = mapped_column(default=0.5, nullable=False)
+    access_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SessionSummaryRecord(Base):
+    """滚动摘要：把旧上下文压缩成摘要，而不是无限堆入模型。"""
+
+    __tablename__ = "session_summaries"
+    __table_args__ = (Index("ix_session_summaries_session", "session_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    start_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

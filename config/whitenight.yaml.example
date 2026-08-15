@@ -29,3 +29,8 @@ ollama_base_url: http://127.0.0.1:11434
 context_budget_chars: 12000
 max_image_bytes: 8388608    # 8 MiB
 soul_file: SOUL.md
+
+# 记忆提取：ollama（主回复后异步）| rules（规则回退）| none
+memory_extractor: ollama
+# 语义检索嵌入模型；为空只启用 FTS5 词法检索
+embedding_model: ""
