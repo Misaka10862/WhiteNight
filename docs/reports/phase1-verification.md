@@ -53,9 +53,13 @@
 - **任务级验证被凭据阻塞**：`hermes status` 显示所有模型 Provider 均未登录；
   `/api/sessions` 返回 401。需要用户执行 `hermes model` / `hermes auth`
   登录一个可用 Provider 后才能验证创建会话、流式事件、审批与中止。
-- **computer-use（cua-driver）**：安装脚本可下载，但 GitHub release 在本机网络
-  环境下直连极慢；经本地代理重试中。安装完成后需要用户在系统设置授予
-  「辅助功能」与「屏幕录制」权限（TCC 绑定 `com.trycua.driver`）。
+- **computer-use（cua-driver）**：已安装 `cua-driver 0.19.3`（经本地代理下载成功），
+  位于 `~/.local/bin/cua-driver` 与 `/Applications/CuaDriver.app`（bundle id
+  `com.trycua.driver`）。`hermes computer-use doctor` 结果：
+  二进制/平台/MCP 会话/bundle 身份均通过；**辅助功能与屏幕录制 TCC 未授权**，
+  UI 检查与事件注入不可用。需要用户在系统设置授权，或运行
+  `hermes computer-use permissions grant` 并在弹出的系统对话框确认。
+  授权前 computer-use 不能执行真实 GUI 操作，但这不阻塞 Gateway 协议开发。
 - 替代方案：若 computer-use 在权限或稳定性上不达标，GUI 操作 Provider 可替换
   （构建计划第 19 节风险表已预留）；Hermes Adapter 只依赖 Gateway 协议。
 
@@ -92,7 +96,7 @@
 |---|---|
 | qwen3-vl:8b 推理 | 可用，性能达标，接口结论已固化 |
 | Hermes Gateway | 协议面可用；任务链路待用户登录 Provider |
-| Hermes computer-use | 驱动安装收尾中；TCC 授权待用户确认 |
+| Hermes computer-use | 驱动 0.19.3 已安装；TCC 授权待用户确认（doctor 已给出精确诊断） |
 | Codex MCP | 可用，握手通过 |
 | NapCat / QQ | 待用户下载与扫码；开发可用 mock 先行 |
 | SQLCipher / Keychain | 可用，原型与集成测试通过 |
