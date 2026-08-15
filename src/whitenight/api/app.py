@@ -120,7 +120,9 @@ def create_app(
         )
         store = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
         provider = model_provider or OllamaProvider(
-            base_url=settings.ollama_base_url, model=settings.model_name
+            base_url=settings.ollama_base_url,
+            model=settings.model_name,
+            max_output_tokens=settings.model_max_output_tokens,
         )
         audit = AuditService(engine)
         approvals = ApprovalService(engine)
