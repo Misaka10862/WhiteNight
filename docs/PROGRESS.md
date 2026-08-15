@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（QQ 真实链路打通：NapCat 扫码 + OneBot 上报/发送 + owner 配置 + 全链路实测）
+最后更新：2026-08-15（收尾审计：诊断全绿 + 真实模型 E2E 通过 + FINAL_STATUS 更新）
 
 ## 当前阶段
 
@@ -19,7 +19,11 @@
   实测：`qq_link_check.py` 输出 `QQ LINK READY`；真实 QQ 收到两条消息——直发测试
   （OneBotSender）与模拟私聊事件经「Adapter→会话→qwen3:8b→回复回传 QQ」的闭环回复；
   `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 51 checks / 0 failures。
+- **收尾审计（本轮）**：`scripts/diagnostics.py --json` 全绿（DB integrity/alembic 0007、
+  Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
+  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 135 passed / 4 skipped 全绿；
+  `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
+- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 55 checks / 0 failures。
   期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
 - **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
   DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`
@@ -179,12 +183,12 @@
 
 ## 下一步（收尾清单）
 
-1. 用户执行 `uv run scripts/run_72h.py --hours 72` 与真实睡眠唤醒测试。
-2. 用户在开发机打开 WebUI 做视觉回归与窄窗口确认。
+1. ✅ 72 小时运行已由 Agent 启动（`run_72h.py`，进行中）；真实睡眠唤醒与网络中断测试可由用户择机进行。
+2. 用户在开发机打开 WebUI 做视觉回归与窄窗口确认（headless 截图已生成）。
 3. ✅ NapCat 安装、QQ 扫码、真实 QQ 收发链路已完成（2026-08-15）。
 4. 用户登录 Hermes Provider，跑真实任务链路契约测试。
 5. 用户确认租用 GPU 计划，完成 LoRA 训练与盲测并选择默认模型。
-6. 用户执行 `gh auth refresh -s workflow && git push -u origin main`。
+6. ✅ GitHub push 已完成（`gh` 凭据 + `git push origin main` 均正常）。
 
 ## 验证命令
 

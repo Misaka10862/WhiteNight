@@ -9,6 +9,8 @@
 - 当前运行方案：**临时最小验证**——本机 `qwen3:8b` 文本模型 + `SOUL.md` 预设人格；
   图片消息给出明确“暂不能看图”提示。LoRA 视觉模型为后续正式方案。
 - 测试基线：**135 passed / 4 skipped**；ruff + mypy strict + 前端 eslint/tsc/vite 全绿。
+- 真实 QQ 链路已打通（NapCat 扫码 + OneBot 上报/发送 + owner 白名单 + 收发闭环实测）。
+- 72 小时持续运行巡检进行中（由 Agent 启动，当前 0 失败）。
 
 ## 关键能力与证据
 
@@ -21,20 +23,20 @@
 | 路由与委派 | 黄金路由集达标；Codex MCP 真实握手；Hermes 未登录安全失败 |
 | WebUI | 11 个页面，会话/记忆/任务/审批/权限/模型/约束/日志/主动消息可用 |
 | 后台服务 | launchd 模板、菜单栏入口、泊松主动消息、过期不补发 |
-| QQ | OneBot Adapter + mock/真实模型 E2E 通过；NapCat 扫码待用户 |
+| QQ | NapCat 真实部署：QQ 小号登录，OneBot 上报（8765）与发送（3000）配置完成，`QQ LINK READY`，直发与事件闭环实测送达 |
 | 备份恢复 | 加密备份 verify/preview/restore 实测；恢复前自动安全备份 |
 | 安全 | 提示注入/SSRF/审批重放/非 owner/附件 MIME/日志脱敏红队覆盖 |
 
 ## 尚需用户完成（阻塞点）
 
-1. **NapCat**：`/Applications/NapCatInstaller.app` 已安装并启动，需在 GUI 完成
-   安装→修改 QQ→启动 NapCat→QQ 小号扫码。
-2. **QQ 配置**：扫码后执行 `uv run scripts/configure_qq.py --owner <QQ号>`，
-   并配置 OneBot 上报 `http://127.0.0.1:8765/api/v1/onebot/events`。
-3. **72 小时运行**：`uv run scripts/run_72h.py --hours 72`。
-4. **视觉回归**：本机打开 WebUI 人工确认。
-5. **Hermes 真实任务**：`hermes model`/`hermes auth` 登录 Provider。
-6. **LoRA**：暂缓中；GPU 与盲测流程工具已就绪。
+1. **72 小时运行**：Agent 已启动 `scripts/run_72h.py --hours 72`，进行中；
+   运行期间如遇睡眠唤醒/网络中断会自动记录，用户无需额外操作。
+2. **视觉回归**：本机打开 WebUI 做一次人工确认（桌面/窄窗口截图已由 headless 生成）。
+3. **Hermes 真实任务**：`hermes model`/`hermes auth` 登录 Provider 后跑真实任务链路。
+4. **Codex 真实任务**：MCP 握手已通过；是否消耗云端配额跑一个短任务需用户确认。
+5. **LoRA**：暂缓中；GPU 租用计划与盲测流程工具已就绪。
+6. **主动消息发 QQ（可选）**：把本地 `config/whitenight.yaml` 的
+   `proactive_sender` 改为 `qq` 即启用（目标为 owner_ids 第一个；默认 log）。
 
 ## 恢复运行的关键命令
 
