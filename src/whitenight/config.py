@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     auto_migrate: bool = True
     memory_extractor: Literal["ollama", "rules", "none"] = "ollama"
     embedding_model: str = ""  # 为空则仅词法检索；小模型按需加载
+    hermes_gateway_url: str = "http://127.0.0.1:9119"
+    codex_command: str = "codex"
+    codex_timeout_s: float = 1800.0
 
     def ensure_dirs(self) -> None:
         """创建运行时目录（数据、日志、备份）。"""

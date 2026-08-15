@@ -34,3 +34,8 @@ soul_file: SOUL.md
 memory_extractor: ollama
 # 语义检索嵌入模型；为空只启用 FTS5 词法检索
 embedding_model: ""
+
+# 委派执行器（阶段 5）
+hermes_gateway_url: http://127.0.0.1:9119
+codex_command: codex
+codex_timeout_s: 1800

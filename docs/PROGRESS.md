@@ -3,12 +3,12 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（第 5 轮，阶段 4）
+最后更新：2026-08-15（第 6 轮，阶段 5）
 
 ## 当前阶段
 
-- **阶段 4 · 长期记忆**：核心已实现并通过测试，本轮收尾（报告 + 提交）。
-- 下一阶段：**阶段 5 · 路由与 Agent 委派**。
+- **阶段 5 · 路由与 Agent 委派**：核心已实现并通过测试，本轮收尾（报告 + 提交）。
+- 下一阶段：**阶段 6 · 完整 WebUI**。
 
 ## 已完成
 
@@ -43,14 +43,27 @@
 - 混合召回：FTS5 词法 + 嵌入接口 + 时间衰减 + 访问加成；嵌入模型按需加载
 - REST API：facts/episodes CRUD、冲突解决、retrieve、extract、export、summary
 - 87 passed / 3 skipped；真实 Ollama 提取出 `居住地：杭州`、`喜好：雨天散步` 并可词法召回
-- 报告：`docs/reports/phase4-verification.md`（随提交补齐）
+- 报告：`docs/reports/phase4-verification.md`
+
+### 阶段 5 · 路由与 Agent 委派 ✅（本轮）
+- 路由：规则优先（用户指定/图片/代码/GUI/记忆/搜索/文件）+ 可选 LLM 结构化输出 + 本地兜底
+- 黄金路由集 `evals/routing/golden.jsonl`（16 例），目标准确率 ≥ 0.9 实测通过
+- 统一委派事件（started/progress/result/error/aborted）+ DelegateProvider 协议
+- Codex MCP Adapter：stdio JSON-RPC、initialize/tools、codex/codex-reply 线程续接、
+  沙箱 workspace-write、审批策略 on-request；真实握手测试通过
+- Hermes Gateway Adapter：健康/认证契约；submit 在用户登录 Provider 前安全快速失败
+- DelegateManager：任务持久化（迁移 0005）、有限重试、中止、不可用快速失败；
+  ChatService 集成后委派失败不破坏主会话（实测可继续本地聊天）
+- 任务 API：/api/v1/tasks 列表/详情/中止
+- 97 passed / 4 skipped
+- 报告：`docs/reports/phase5-verification.md`（随提交补齐）
 
 ## 未完成（按构建计划阶段）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 5 | 结构化路由、Hermes/Codex Adapter、任务/进度/审批/中止事件、升级重试 | 待开始 |
-| 6 | 完整 WebUI（记忆/任务/审批/权限/主动消息/模型/备份页面） | 记忆 API 已备好，页面待做 |
+| 5 | 结构化路由、Hermes/Codex Adapter、任务/进度/审批/中止事件、升级重试 | ✅ 核心完成 |
+| 6 | 完整 WebUI（记忆/任务/审批/权限/主动消息/模型/备份页面） | 待开始 |
 | 7 | launchd 后台服务、泊松主动消息调度 | 待开始 |
 | 8 | QQ 私聊（NapCat + OneBot Adapter） | 待开始 |
 | 9 | LoRA 人格固化 | 待开始 |
@@ -80,14 +93,20 @@
    需 `uv sync --extra ocr`，否则 OCR 测试自动跳过。
 8. **SQLite 时间戳 naive/aware 混用**：已用统一 naive-UTC 比较修复（审批/衰减），后续新增
    时间比较必须复用同一约定，防止 `TypeError`。
+9. **Hermes submit 契约未锁定**：Gateway 认证通过但未登录 Provider；Adapter 在未登录时
+   快速失败（已实测 `DelegateUnavailableError`）。用户登录后需完成真实任务链路契约测试，
+   再固化 submit 端点 payload。
+10. **Codex 真实任务未运行**：MCP 握手/工具列表实测通过；为避免消耗云端配额，编码任务
+    以 Fake Provider 做状态机测试。真实短任务烟测（如生成一个 hello.py）留待用户确认后执行。
 
-## 下一步（阶段 5 计划）
+## 下一步（阶段 6 计划）
 
-1. 路由：结构化 JSON 输出（类别/执行者/风险）+ 规则覆盖 + 用户指定 + 升级策略。
-2. Codex MCP Adapter：stdio 会话、线程续接、工作目录、超时与错误恢复（已有握手证据）。
-3. Hermes Gateway Adapter：HTTP/WS 任务、进度、审批与中止（等用户登录后做真实契约测试）。
-4. 统一任务事件与 ChatService 接线：模型 tool_calls → ToolExecutor（审批事件给 WebUI）。
-5. 黄金路由集 `evals/routing/` 与路由测试。
+1. WebUI 页面：聊天增强（任务事件渲染）、会话管理（搜索/重命名/归档/删除/导出）。
+2. 记忆页面：事实列表/编辑/冲突解决/情景记忆/删除 + 导出。
+3. 任务页面：执行者、步骤、工具事件、产物、错误、重试与中止按钮。
+4. 审批页面：风险说明、目标、参数摘要、允许一次/本次会话/拒绝（对接 ApprovalService）。
+5. 权限页面：工具类别授权与撤销；主动消息/模型/运行状态/备份页面按阶段 7-10 逐步补。
+6. 桌面与窄窗口视觉回归；所有首版工作流可从 WebUI 完成。
 
 ## 验证命令
 

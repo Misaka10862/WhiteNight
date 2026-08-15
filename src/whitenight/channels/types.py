@@ -57,7 +57,7 @@ class ChatRequest(BaseModel):
 class ChatEvent(BaseModel):
     """标准化聊天事件（WebSocket 传输用）。"""
 
-    type: Literal["start", "chunk", "done", "error"]
+    type: Literal["start", "chunk", "done", "error", "task"]
     session_id: str | None = None
     delta: str | None = None
     message_id: str | None = None

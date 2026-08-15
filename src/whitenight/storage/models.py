@@ -188,3 +188,29 @@ class SessionSummaryRecord(Base):
     start_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     end_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AgentTask(Base):
+    """委派任务：执行者、状态、进度、产物、错误与重试记录。"""
+
+    __tablename__ = "agent_tasks"
+    __table_args__ = (Index("ix_agent_tasks_session", "session_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    executor: Mapped[str] = mapped_column(String(16), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), default="chat", nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(24), default="queued", nullable=False
+    )  # queued|running|succeeded|failed|aborted
+    risk: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    cwd: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    thread_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    artifacts: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
