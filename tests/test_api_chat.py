@@ -90,3 +90,20 @@ def test_unknown_session_reports_error(chat_client: TestClient) -> None:
 def test_messages_endpoint_404(chat_client: TestClient) -> None:
     response = chat_client.get("/api/v1/sessions/missing/messages")
     assert response.status_code == 404
+
+
+def test_text_model_image_fallback(settings: Settings, engine) -> None:
+    """临时方案：qwen3:8b 无视觉时，图片消息得到明确说明而不是误解析。"""
+    del engine
+    from whitenight.agent.service import DummyProvider
+    from whitenight.api.app import create_app
+
+    text_settings = settings.model_copy(update={"model_supports_vision": False})
+    with TestClient(create_app(text_settings, model_provider=DummyProvider())) as client:
+        session = client.post("/api/v1/sessions", json={}).json()
+        image = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+        with client.websocket_connect("/api/v1/chat/ws") as websocket:
+            websocket.send_json(_chat_payload(session["id"], "看这张图", image=image))
+            events = _collect_events(websocket)
+        assert events[-1]["type"] == "done"
+        assert "暂时看不了图片" in events[-1]["text"]

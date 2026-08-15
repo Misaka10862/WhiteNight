@@ -86,6 +86,21 @@ class ChatService:
             self._proactive.mark_activity()
         yield ChatEvent(type="start", session_id=session_id)
 
+        if image_path is not None and not self._settings.model_supports_vision:
+            reply = (
+                "主人，现在临时使用文本模型（qwen3:8b），暂时看不了图片。"
+                "等正式 LoRA 视觉模型完成并切回来后，我马上就能看图啦。"
+            )
+            message = self._persist_assistant(session_id, reply)
+            yield ChatEvent(
+                type="done",
+                session_id=session_id,
+                message_id=message.id,
+                text=reply,
+                extra={"user_message_id": user_message.id},
+            )
+            return
+
         plan = await self._router.route(request.text, has_image=image_path is not None)
         if (
             plan.executor in {ExecutorChoice.HERMES, ExecutorChoice.CODEX}

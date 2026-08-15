@@ -3,12 +3,14 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（第 11 轮，阶段 10）
+最后更新：2026-08-15（用户指示：LoRA 暂缓 + 临时文本模型 + 安装 NapCat）
 
 ## 当前阶段
 
-- **阶段 10 · 发布加固**：备份恢复/诊断/日志/文档已完成；72h 长时测试与 LoRA 盲测待用户。
-- 全部 10 个阶段中 0-8 完成，9 待 GPU/用户，10 核心完成。
+- **最小验证方案（用户确认）**：LoRA 训练暂缓；临时使用本机 `qwen3:8b`
+  文本模型 + SOUL.md 预设人格跑通最小验证；之后再按正式计划训练带视觉能力的模型。
+- **NapCat 安装进行中**：官方 Mac 安装器 v1.5 已下载（arm64，zip 校验通过）、
+  安装到 `/Applications/NapCatInstaller.app` 并已启动 GUI，等待用户操作与扫码。
 
 ## 已完成
 
@@ -94,16 +96,12 @@
 - NapCat 安装与 QQ 小号登录仍需用户操作；当前以 mock OneBot 服务器完成链路验证
 - 报告：`docs/reports/phase8-verification.md`
 
-### 阶段 9 · LoRA 人格固化 —— 离线准备 ✅，训练执行受阻
-- 数据规范/审阅格式/许可证清单（`model/specs/`）+ 6 条合成 CC0 示例
-- 数据校验脚本 `scripts/validate_training_data.py`（重复/红线/类别/长度/许可）
-- ms-swift QLoRA 配置基线（`model/configs/qwen3vl_persona_qlora.yaml`，
-  freeze_vit=true 保护视觉塔）+ 合并/量化/导入 Ollama dry-run 脚本
-- 人格黄金集 `evals/persona/golden.jsonl`（10 例，无 system prompt）
-- `scripts/eval_persona.py`：基线 qwen3-vl 实测通过率 1.00（自动判定，阈值 0.6）
-- `scripts/blind_ab.py`：匿名 A/B 盲测与 reveal；`scripts/run_model_regression.sh`
-- **阻塞**：实际 QLoRA 需要租用 GPU；语料审阅与盲测需要用户参与。
-  未完成训练前阶段 9 不标记 ✅，不影响阶段 10 先行。
+### 阶段 9 · LoRA 人格固化 —— 用户决定暂缓（临时替代方案）
+- 离线工具链保持就绪（数据规范/校验/训练配置/盲测脚本）。
+- **用户指示**：先暂缓训练，用本地 `qwen3:8b` 文本模型 + SOUL.md 人格跑通最小验证。
+- 代码已切换默认 `model_name=qwen3:8b`、`model_supports_vision=false`；
+  图片消息会明确说明“临时文本模型暂不能看图”而不是误解析。
+- 待正式 LoRA：切回 `qwen3-vl:8b` + `model_supports_vision=true`，再训练/盲测。
 
 ### 阶段 10 · 发布加固 —— 核心完成 ✅，长时测试待用户
 - 加密备份/恢复：WNBK1 + PBKDF2 + Fernet；SQLite online backup + attachments；
@@ -149,8 +147,10 @@
    需用户执行 `hermes model` / `hermes auth` 登录后跑任务链路契约烟测。
 3. **cua-driver TCC 待授权**：`hermes computer-use doctor` 显示辅助功能与屏幕录制未授予；
    需用户在系统设置授权或运行 `hermes computer-use permissions grant`。
-4. **NapCat / QQ 未安装**：官方 npm 包已撤下，需用户下载构建并扫码登录 QQ 小号；
-   OneBot Adapter 可先用 mock 开发。
+4. **NapCat / QQ 进行中**：官方 Mac 安装器 v1.5 已下载（arm64，zip 校验通过）并安装到
+   `/Applications/NapCatInstaller.app`，GUI 已启动；待用户按窗口操作（安装→修改 QQ→
+   启动 NapCat）并扫码登录 QQ 小号。登录后还需在 NapCat WebUI 配置 OneBot 上报地址
+   `http://127.0.0.1:8765/api/v1/onebot/events`。
 5. **真实 file.delete / screen.capture 未做系统级烟测**：分别需要 Finder 自动化与屏幕录制
    权限；单元/集成测试已用受控 fake 覆盖状态机与审计。
 6. **DuckDuckGo HTML 端点 202 反爬**：已用 DDG Lite + Bing 兜底解决并实测，但上游可能继续

@@ -27,6 +27,7 @@ def settings(tmp_path) -> Settings:
         auto_migrate=False,
         memory_extractor="none",
         soul_file=tmp_path / "SOUL.md",
+        model_supports_vision=True,  # 图片链路测试保持覆盖；临时文本模型另有专项测试
     )
 
 

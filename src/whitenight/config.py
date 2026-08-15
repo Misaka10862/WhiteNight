@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     keychain_service: str = "com.whitenight.credentials"
 
     # 模型与上下文（阶段 2 最小纵向链路；阶段 4 记忆）
-    model_name: str = "qwen3-vl:8b"
+    # 临时最小验证方案：LoRA 暂缓，先使用本地 qwen3:8b 文本模型 + SOUL.md 人格。
+    model_name: str = "qwen3:8b"
+    model_supports_vision: bool = False  # qwen3:8b 无视觉；LoRA 后切回 qwen3-vl 并置 true
     ollama_base_url: str = "http://127.0.0.1:11434"
     context_budget_chars: int = 12_000
     max_image_bytes: int = 8 * 1024 * 1024  # 8 MiB

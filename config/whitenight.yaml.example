@@ -24,7 +24,9 @@ keychain_backend: macos     # macos | memory（memory 仅限测试/CI）
 keychain_service: com.whitenight.credentials
 
 # --- 模型与上下文 ---
-model_name: qwen3-vl:8b
+# 临时最小验证：文本模型 + SOUL.md 人格；LoRA 视觉模型完成后切回 qwen3-vl:8b
+model_name: qwen3:8b
+model_supports_vision: false   # 切回 qwen3-vl:8b 时改为 true
 ollama_base_url: http://127.0.0.1:11434
 context_budget_chars: 12000
 max_image_bytes: 8388608    # 8 MiB
