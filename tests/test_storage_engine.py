@@ -32,7 +32,19 @@ def test_sqlite_engine_creates_parent_dir(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_sqlcipher_without_driver_explains_extra(tmp_path: Path) -> None:
+def test_sqlcipher_without_driver_explains_extra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "sqlcipher3":
+            raise ImportError("sqlcipher3 not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
     url = f"sqlcipher:///{tmp_path / 'x.db'}"
     with pytest.raises(StorageConfigurationError, match="sqlcipher"):
         build_engine(url, key="k")

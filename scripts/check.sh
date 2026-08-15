@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
-echo "==> uv sync --dev"
-uv sync --dev
+echo "==> uv sync --dev --extra sqlcipher"
+uv sync --dev --extra sqlcipher
 
 echo "==> ruff check"
 uv run ruff check .

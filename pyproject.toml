@@ -40,7 +40,7 @@ dev = [
 # SQLCipher driver is intentionally optional: only needed for the encrypted
 # production database. The development/test stack uses plain SQLite.
 [project.optional-dependencies]
-sqlcipher = ["sqlcipher3-binary>=0.5.4,<1"]
+sqlcipher = ["sqlcipher3>=0.6.2,<1"]
 
 [build-system]
 requires = ["hatchling"]

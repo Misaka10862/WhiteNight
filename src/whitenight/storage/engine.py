@@ -69,7 +69,10 @@ def build_engine(database_url: str, key: str | None = None) -> Engine:
         def _set_key(dbapi_connection: Any, _record: Any) -> None:
             cursor = dbapi_connection.cursor()
             try:
-                cursor.execute("PRAGMA key = ?", (key,))
+                # SQLCipher 的 PRAGMA key 不接受绑定参数；密钥经过单引号转义后拼接，
+                # 且该语句从不进入日志。
+                escaped_key = key.replace("'", "''")
+                cursor.execute(f"PRAGMA key = '{escaped_key}'")
             finally:
                 cursor.close()
 
