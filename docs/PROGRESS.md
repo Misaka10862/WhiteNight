@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（收尾审计：诊断全绿 + 真实模型 E2E 通过 + FINAL_STATUS 更新）
+最后更新：2026-08-15（Ollama 卡死故障定位并恢复；QQ 链路自检复通）
 
 ## 当前阶段
 
@@ -23,7 +23,10 @@
   Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
   输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 135 passed / 4 skipped 全绿；
   `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 55 checks / 0 failures。
+- **Ollama 卡死事件（已恢复）**：用户 QQ 消息在 10:40 后无回复；定位为 Ollama
+  `qwen3:8b` 卸载卡在 `Stopping...`，`/api/generate` 全部超时（后端/QQ 均正常）。
+  已 `brew services restart ollama` 恢复；QQ 闭环自检回复「链路正常」。详见问题 12。
+- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 126 checks / 0 failures。
   期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
 - **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
   DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`
@@ -180,6 +183,11 @@
     以 Fake Provider 做状态机测试。真实短任务烟测（如生成一个 hello.py）留待用户确认后执行。
 11. **WebUI 未做真实浏览器视觉回归**：已通过 tsc/eslint/build、Vite 代理全链路与 API 工作流
     验证；窄窗口/键盘/无障碍需要用户在本机打开 `npm run dev` 做一次人工确认。
+12. ✅ **Ollama 卸载卡死导致 QQ 无回复（2026-08-15 已恢复）**：现象为用户私聊入库但
+    长时间无回复、`ollama ps` 显示 `Stopping...`、`/api/generate` 超时；后端与 NapCat
+    正常。处理：`brew services restart ollama` 后生成与 QQ 闭环自检通过。
+    遗留监测缺口：72h 巡检只测 `/healthz`，不测真实生成，下次模型假死时仍可能漏报；
+    后续可给巡检增加低频生成烟测（待用户确认是否自动重启 Ollama）。
 
 ## 下一步（收尾清单）
 

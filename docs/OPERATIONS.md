@@ -38,7 +38,8 @@ uv run alembic downgrade -1
 | 图片理解模型说“没看到图” | 图片必须挂在 message；升级 Ollama 后重跑阶段 1 烟测 |
 | Codex 任务立即失败 | `codex --version`、`~/.codex/auth.json` 存在性；不要打印 auth 内容 |
 | Hermes 任务立即失败 | `hermes status` 是否登录 Provider；未登录是预期快速失败 |
-| QQ 无响应 | 模型页 QQ/OneBot 状态；NapCat 上报地址与 owner QQ 号 |
+| QQ 无响应 | 模型页 QQ/OneBot 状态；NapCat 上报地址与 owner QQ 号；再跑一次生成烟测排除 Ollama 假死 |
+| Ollama 假死（`ollama ps` 显示 `Stopping...`、生成请求超时） | `brew services restart ollama`，随后用最小 `/api/generate` 烟测确认恢复 |
 | 主动消息没发 | 阶段 8 前发送器为 log；确认 `proactive_enabled` 与静默时段 |
 
 ## 安全提醒
