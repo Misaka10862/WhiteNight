@@ -3,12 +3,12 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（第 9 轮，阶段 8）
+最后更新：2026-08-15（第 10 轮，阶段 9 准备）
 
 ## 当前阶段
 
-- **阶段 8 · QQ 私聊（OneBot Adapter）**：核心已实现并实测，本轮收尾。
-- 下一阶段：**阶段 9 · LoRA 人格固化**（需要用户参与语料审阅与盲测，先做准备）。
+- **阶段 9 · LoRA 人格固化**：离线工具链就绪；训练/盲测需租用 GPU 与用户裁决，已记录为阻塞。
+- 下一阶段：**阶段 10 · 发布加固**（不依赖 LoRA 的部分先行）。
 
 ## 已完成
 
@@ -92,7 +92,18 @@
 - 发送器失败有限重试；ProactiveSender 协议适配（阶段 8 起可用 QQ 主动消息）
 - 契约测试 8 个；真实 E2E：mock OneBot API + 真实 Ollama，事件→回复→send_private_msg
 - NapCat 安装与 QQ 小号登录仍需用户操作；当前以 mock OneBot 服务器完成链路验证
-- 报告：`docs/reports/phase8-verification.md`（随提交补齐）
+- 报告：`docs/reports/phase8-verification.md`
+
+### 阶段 9 · LoRA 人格固化 —— 离线准备 ✅，训练执行受阻
+- 数据规范/审阅格式/许可证清单（`model/specs/`）+ 6 条合成 CC0 示例
+- 数据校验脚本 `scripts/validate_training_data.py`（重复/红线/类别/长度/许可）
+- ms-swift QLoRA 配置基线（`model/configs/qwen3vl_persona_qlora.yaml`，
+  freeze_vit=true 保护视觉塔）+ 合并/量化/导入 Ollama dry-run 脚本
+- 人格黄金集 `evals/persona/golden.jsonl`（10 例，无 system prompt）
+- `scripts/eval_persona.py`：基线 qwen3-vl 实测通过率 1.00（自动判定，阈值 0.6）
+- `scripts/blind_ab.py`：匿名 A/B 盲测与 reveal；`scripts/run_model_regression.sh`
+- **阻塞**：实际 QLoRA 需要租用 GPU；语料审阅与盲测需要用户参与。
+  未完成训练前阶段 9 不标记 ✅，不影响阶段 10 先行。（随提交补齐）
 
 ## 未完成（按构建计划阶段）
 
@@ -102,6 +113,8 @@
 | 6 | 完整 WebUI（记忆/任务/审批/权限/模型/规则页面） | ✅ 核心完成（主动/日志/备份为诚实占位） |
 | 7 | launchd 后台服务、泊松主动消息调度 | ✅ 核心完成（真实发送器 QQ 在阶段 8） |
 | 8 | QQ 私聊（OneBot Adapter） | ✅ 核心完成（NapCat 登录待用户） |
+| 9 | LoRA 人格固化 | ⚠️ 离线工具链就绪；训练需 GPU + 用户盲测 |
+| 10 | 发布加固（72h、备份恢复演练、文档） | 待开始 |
 | 7 | launchd 后台服务、泊松主动消息调度 | 待开始 |
 | 8 | QQ 私聊（NapCat + OneBot Adapter） | 待开始 |
 | 9 | LoRA 人格固化 | 待开始 |
@@ -140,12 +153,13 @@
 11. **WebUI 未做真实浏览器视觉回归**：已通过 tsc/eslint/build、Vite 代理全链路与 API 工作流
     验证；窄窗口/键盘/无障碍需要用户在本机打开 `npm run dev` 做一次人工确认。
 
-## 下一步（阶段 9 计划）
+## 下一步（阶段 10 计划）
 
-1. 训练数据规范与审阅格式（`model/specs/`），先做许可清理与用户最终裁决流程。
-2. QLoRA 链路准备：ms-swift 方案、视觉塔冻结策略、Adapter 合并与 Ollama 导入验证。
-3. 黄金评估集补齐：人格盲测 A/B 流程与工具/路由/图片回归。
-4. 训练需租赁 GPU 与用户盲测，先把可离线准备的配置与脚本就位。
+1. 全量测试：单元/集成/E2E、权限红队、性能与稳定性。
+2. 备份/恢复：加密全量备份、增量备份、恢复预览与恢复演练脚本。
+3. 诊断工具：数据库迁移/升级回滚、日志查看与脱敏导出。
+4. 72 小时持续运行测试（需要用户机器长期运行）。
+5. 安装/首次启动/权限授予/QQ 配置/故障处理文档固化。
 
 ## 验证命令
 

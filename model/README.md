@@ -16,7 +16,20 @@ model/
 
 ## 阶段 9 前置要求
 
-- 语料许可与许可证复核完成；
-- 用户对“是否像小白”的最终裁决流程已就绪；
+- 语料许可与许可证复核完成（`specs/license_checklist.md`）；
+- 用户对“是否像小白”的最终裁决流程已就绪（`specs/review_format.md`）；
 - 保留未训练基线、候选 Adapter 与完整评估结果，支持回滚；
 - LoRA 不写入实时用户偏好、权限规则、工具清单或易变化事实。
+
+## 阶段 9 工具
+
+```bash
+uv run scripts/validate_training_data.py model/specs/persona_samples.jsonl
+uv run scripts/eval_persona.py --model qwen3-vl:8b
+uv run scripts/blind_ab.py run --model-a qwen3-vl:8b --model-b <candidate>
+bash model/scripts/export_to_ollama.sh          # dry-run；--run 才执行
+```
+
+- 数据规范：`specs/persona_data_spec.md`；示例（合成 CC0）：`specs/persona_samples.jsonl`。
+- 训练配置基线：`configs/qwen3vl_persona_qlora.yaml`（freeze_vit=true）。
+- 盲测结果与训练运行记录不入 Git。
