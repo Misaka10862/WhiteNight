@@ -28,9 +28,12 @@ uv run scripts/configure_qq.py --owner <QQ小号>
 重启：`uv run whitenight`。验证：
 
 ```bash
+uv run scripts/qq_link_check.py
 curl http://127.0.0.1:8765/api/v1/onebot/status
-# 期望：enabled=true, owner_ids=[<QQ小号>]
+# 期望：enabled=true, owner_ids=[<QQ小号>]，QQ LINK READY
 ```
+
+主动消息发 QQ：把 `proactive_sender` 改为 `qq`（发送目标为 owner_ids 第一个）。
 
 ## 风险与约束
 

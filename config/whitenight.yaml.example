@@ -49,7 +49,7 @@ proactive_quiet_start: "23:00"
 proactive_quiet_end: "08:00"
 proactive_suppress_minutes: 60
 proactive_skip_grace_minutes: 45
-proactive_sender: log           # log | none（QQ 在阶段 8 接入）
+proactive_sender: log           # log | none | qq（NapCat 配好后改为 qq）
 
 # QQ / OneBot（阶段 8；NapCat 登录需要用户操作）
 qq_enabled: false

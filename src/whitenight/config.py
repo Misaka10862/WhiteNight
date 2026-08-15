@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     proactive_quiet_end: str = "08:00"
     proactive_suppress_minutes: int = 60
     proactive_skip_grace_minutes: int = 45
-    proactive_sender: Literal["log", "none"] = "log"
+    proactive_sender: Literal["log", "none", "qq"] = "log"
 
     # QQ / OneBot（阶段 8；NapCat 登录需要用户操作）
     qq_enabled: bool = False

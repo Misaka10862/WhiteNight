@@ -65,19 +65,24 @@ class FakeProvider:
 class FakeSender:
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.metadata: list[dict[str, object]] = []
 
     def send(self, message: str, metadata: dict[str, object]) -> bool:
-        del metadata
         self.messages.append(message)
+        self.metadata.append(metadata)
         return True
 
 
 def _service(
-    engine: Engine, tmp_path, provider=None, sender=None
+    engine: Engine, tmp_path, provider=None, sender=None, qq_owner_ids: list[int] | None = None
 ) -> tuple[ProactiveService, FakeSender]:
     memory = MemoryService(MemoryStore(engine), NullMemoryExtractor(), NullEmbeddingProvider())
     sender = sender or FakeSender()
-    settings = Settings(data_dir=tmp_path, database_url="sqlite:///unused.db")
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite:///unused.db",
+        qq_owner_ids=qq_owner_ids or [],
+    )
     return (
         ProactiveService(
             ProactiveStore(engine), provider or FakeProvider(), memory, sender, settings
@@ -106,6 +111,17 @@ def test_due_tick_sends_and_reschedules(engine: Engine, tmp_path) -> None:
     assert status.last_sent_at is not None
     assert status.next_candidate_at is not None
     assert status.next_candidate_at > now_utc
+
+
+def test_proactive_sender_receives_qq_owner(engine: Engine, tmp_path) -> None:
+    store = ProactiveStore(engine)
+    store.update_config(_config())
+    now_utc = datetime.now(UTC).replace(tzinfo=None)
+    store.set_next_candidate(now_utc - timedelta(minutes=1))
+    service, sender = _service(engine, tmp_path, qq_owner_ids=[10001])
+    outcome = asyncio.run(service.tick(datetime.now()))
+    assert outcome.action == "sent"
+    assert sender.metadata[-1].get("user_id") == 10001
 
 
 def test_expired_candidate_is_skipped_not_batched(engine: Engine, tmp_path) -> None:

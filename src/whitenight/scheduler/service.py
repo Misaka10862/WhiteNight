@@ -172,9 +172,13 @@ class ProactiveService:
             return None
 
     async def _send_with_retries(self, message: str, max_attempts: int = 2) -> bool:
+        owner_user_id = self._settings.qq_owner_ids[0] if self._settings.qq_owner_ids else None
         for attempt in range(1, max_attempts + 1):
             try:
-                if self._sender.send(message, {"channel": "proactive", "attempt": attempt}):
+                metadata: dict[str, object] = {"channel": "proactive", "attempt": attempt}
+                if owner_user_id is not None:
+                    metadata["user_id"] = owner_user_id
+                if self._sender.send(message, metadata):
                     return True
             except Exception as exc:
                 logger.warning("主动消息发送失败 attempt=%s：%s", attempt, exc)

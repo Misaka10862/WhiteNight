@@ -132,11 +132,15 @@ def create_app(
         )
         memory_service = MemoryService(MemoryStore(engine), extractor, embedding_provider, audit)
         proactive_store = ProactiveStore(engine)
-        proactive_sender = (
-            LogSender(settings.data_dir / "logs" / "proactive.jsonl")
-            if settings.proactive_sender == "log"
-            else NullSender()
-        )
+        proactive_sender: LogSender | NullSender | OneBotSender
+        if settings.proactive_sender == "qq" and settings.qq_owner_ids:
+            proactive_sender = OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars)
+        else:
+            proactive_sender = (
+                LogSender(settings.data_dir / "logs" / "proactive.jsonl")
+                if settings.proactive_sender in {"log", "qq"}
+                else NullSender()
+            )
         proactive_service = ProactiveService(
             proactive_store, provider, memory_service, proactive_sender, settings
         )
