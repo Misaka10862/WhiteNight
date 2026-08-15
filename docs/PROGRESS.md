@@ -9,8 +9,10 @@
 
 - **最小验证方案（用户确认）**：LoRA 训练暂缓；临时使用本机 `qwen3:8b`
   文本模型 + SOUL.md 预设人格跑通最小验证；之后再按正式计划训练带视觉能力的模型。
+  `scripts/e2e_smoke.py --real-model` 实测通过（流式聊天/记忆/主动状态/备份）。
 - **NapCat 安装进行中**：官方 Mac 安装器 v1.5 已下载（arm64，zip 校验通过）、
   安装到 `/Applications/NapCatInstaller.app` 并已启动 GUI，等待用户操作与扫码。
+  扫码后的 OneBot 上报与 owner 配置工具已备好：`scripts/configure_qq.py` + `docs/NAPCAT.md`。
 
 ## 已完成
 
