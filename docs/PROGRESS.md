@@ -3,21 +3,23 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（用户指示：LoRA 暂缓 + 临时文本模型 + 安装 NapCat）
+最后更新：2026-08-15（QQ 真实链路打通：NapCat 扫码 + OneBot 上报/发送 + owner 配置 + 全链路实测）
 
 ## 当前阶段
 
 - **最小验证方案（用户确认）**：LoRA 训练暂缓；临时使用本机 `qwen3:8b`
   文本模型 + SOUL.md 预设人格跑通最小验证；之后再按正式计划训练带视觉能力的模型。
   `scripts/e2e_smoke.py --real-model` 实测通过（流式聊天/记忆/主动状态/备份）。
-- **NapCat 已启动，等待扫码**：QQ 入口注入已完成（package.json 指向 NapCat 加载器，
-  `.bak` 备份存在）；QQ 已以 `--no-sandbox` 重启，NapCat WebUI 6099 上线。
-  二维码与 WebUI 已打开。下一步：用户扫码 → WebUI「网络配置」新建 HTTP 客户端，
-  上报 `http://127.0.0.1:8765/api/v1/onebot/events` → 配置 owner。
-  扫码后的 OneBot 上报与 owner 配置工具已备好：`scripts/configure_qq.py`、
-  `scripts/qq_link_check.py` + `docs/NAPCAT.md`；`proactive_sender: qq` 已接通。
-  已用 mock OneBot + 真实 qwen3:8b 验证 Adapter 全链路（事件→回复→send_private_msg）。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 >10 checks / 0 failures。
+- **NapCat + QQ 真实链路已打通**：QQ 小号已扫码登录（QQ 以 `--no-sandbox` 重启，
+  WebUI 6099 / OneBot HTTP 服务端 3000 上线）。NapCat 网络配置已完成：
+  HTTP 客户端上报 WhiteNight `http://127.0.0.1:8765/api/v1/onebot/events`；
+  HTTP 服务端 `127.0.0.1:3000` 供 WhiteNight 发送 `send_private_msg`。
+  WhiteNight 已配置 `qq_enabled=true` + owner 白名单（QQ 号只留在本地
+  `config/whitenight.yaml`，不写入本仓库），后端已重启生效。
+  实测：`qq_link_check.py` 输出 `QQ LINK READY`；真实 QQ 收到两条消息——直发测试
+  （OneBotSender）与模拟私聊事件经「Adapter→会话→qwen3:8b→回复回传 QQ」的闭环回复；
+  `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
+- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 51 checks / 0 failures。
   期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
 - **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
   DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`
@@ -104,7 +106,8 @@
 - 渠道→会话映射（迁移 0007）：QQ 与 WebUI 共享会话/记忆/任务
 - 发送器失败有限重试；ProactiveSender 协议适配（阶段 8 起可用 QQ 主动消息）
 - 契约测试 8 个；真实 E2E：mock OneBot API + 真实 Ollama，事件→回复→send_private_msg
-- NapCat 安装与 QQ 小号登录仍需用户操作；当前以 mock OneBot 服务器完成链路验证
+- NapCat 真实部署完成：QQ 小号登录、HTTP 上报/发送网络配置、owner 白名单、
+  直发测试与模拟事件闭环实测均通过（`QQ LINK READY`）
 - 报告：`docs/reports/phase8-verification.md`
 
 ### 阶段 9 · LoRA 人格固化 —— 用户决定暂缓（临时替代方案）
@@ -135,13 +138,9 @@
 | 5 | 结构化路由、Hermes/Codex Adapter、任务/进度/审批/中止事件、升级重试 | ✅ 核心完成 |
 | 6 | 完整 WebUI（记忆/任务/审批/权限/模型/规则页面） | ✅ 核心完成（主动/日志/备份为诚实占位） |
 | 7 | launchd 后台服务、泊松主动消息调度 | ✅ 核心完成（真实发送器 QQ 在阶段 8） |
-| 8 | QQ 私聊（OneBot Adapter） | ✅ 核心完成（NapCat 登录待用户） |
+| 8 | QQ 私聊（OneBot Adapter + NapCat） | ✅ 完成（真实 QQ 链路已实测） |
 | 9 | LoRA 人格固化 | ⚠️ 离线工具链就绪；训练需 GPU + 用户盲测 |
 | 10 | 发布加固（72h、备份恢复演练、文档） | ✅ 核心完成；72h/盲测待用户 |
-| 7 | launchd 后台服务、泊松主动消息调度 | 待开始 |
-| 8 | QQ 私聊（NapCat + OneBot Adapter） | 待开始 |
-| 9 | LoRA 人格固化 | 待开始 |
-| 10 | 发布加固（72h、备份恢复演练、文档） | 待开始 |
 
 阶段内已知缺口：
 - 聊天模型 tool_calls 与 ToolExecutor 的接线（属阶段 5）
@@ -149,7 +148,7 @@
 - 旧版 .doc/.xls/.ppt 受控转换器（解析器已给出明确错误路径）
 - 语义召回默认关闭：`embedding_model` 为空时只有 FTS5 词法，自然语言问句需要先配小型嵌入模型
 
-## 问题记录（未解决）
+## 问题记录
 
 1. **GitHub push 被拒/不稳定**：OAuth 凭据缺 `workflow` scope（主要阻塞），且直连
    间歇性 HTTP2 framing 错误/超时。本地提交与 tag 完好。
@@ -158,11 +157,10 @@
    需用户执行 `hermes model` / `hermes auth` 登录后跑任务链路契约烟测。
 3. **cua-driver TCC 待授权**：`hermes computer-use doctor` 显示辅助功能与屏幕录制未授予；
    需用户在系统设置授权或运行 `hermes computer-use permissions grant`。
-4. **NapCat / QQ 进行中**：官方 Mac 安装器 v1.5 已下载（arm64，zip 校验通过）并安装到
-   `/Applications/NapCatInstaller.app`，GUI 已启动。系统日志显示其自动代理检测持续收到
-   HTTP 403（GitHub 代理源），建议用户在安装器里手动选择代理或填写
-   `http://127.0.0.1:7897`（本机 Clash）后点安装。扫码后执行
-   `scripts/configure_qq.py`、`scripts/qq_link_check.py`（工具已就绪）。
+4. ✅ **NapCat / QQ（2026-08-15 已解决）**：安装器「未安装」的根因是 App Management
+   TCC 未授权导致 root `cp` 被拒；用户授权后入口注入成功。QQ 小号已扫码登录，
+   NapCat HTTP 客户端（上报 8765）与 HTTP 服务端（3000 发送）均已配置，
+   WhiteNight owner 白名单已写入本地配置，真实 QQ 收发闭环实测通过。
 5. **真实 file.delete / screen.capture 未做系统级烟测**：分别需要 Finder 自动化与屏幕录制
    权限；单元/集成测试已用受控 fake 覆盖状态机与审计。
 6. **DuckDuckGo HTML 端点 202 反爬**：已用 DDG Lite + Bing 兜底解决并实测，但上游可能继续
@@ -183,7 +181,7 @@
 
 1. 用户执行 `uv run scripts/run_72h.py --hours 72` 与真实睡眠唤醒测试。
 2. 用户在开发机打开 WebUI 做视觉回归与窄窗口确认。
-3. 用户安装 NapCat 并扫码 QQ 小号，跑真实 QQ 链路。
+3. ✅ NapCat 安装、QQ 扫码、真实 QQ 收发链路已完成（2026-08-15）。
 4. 用户登录 Hermes Provider，跑真实任务链路契约测试。
 5. 用户确认租用 GPU 计划，完成 LoRA 训练与盲测并选择默认模型。
 6. 用户执行 `gh auth refresh -s workflow && git push -u origin main`。
