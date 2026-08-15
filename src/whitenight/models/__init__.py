@@ -1,1 +1,12 @@
-"""模型 Provider：Ollama 与未来模型。（阶段 0 占位，按构建计划逐阶段实现）"""
+"""模型 Provider 接口与实现选择。"""
+
+from whitenight.models.base import ModelChunk, ModelProvider, ModelProviderError, ProviderMessage
+from whitenight.models.ollama import OllamaProvider
+
+__all__ = [
+    "ModelChunk",
+    "ModelProvider",
+    "ModelProviderError",
+    "OllamaProvider",
+    "ProviderMessage",
+]

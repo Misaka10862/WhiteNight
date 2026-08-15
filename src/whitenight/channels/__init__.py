@@ -1,1 +1,23 @@
-"""渠道适配：Web、OneBot 与未来渠道。（阶段 0 占位，按构建计划逐阶段实现）"""
+"""channels: Web、OneBot 和未来渠道的统一消息边界。"""
+
+from whitenight.channels.types import (
+    ChatAttachment,
+    ChatEvent,
+    ChatRequest,
+    MessageKind,
+    MessageRecord,
+    MessageRole,
+    SessionCreate,
+    SessionSummary,
+)
+
+__all__ = [
+    "ChatAttachment",
+    "ChatEvent",
+    "ChatRequest",
+    "MessageKind",
+    "MessageRecord",
+    "MessageRole",
+    "SessionCreate",
+    "SessionSummary",
+]

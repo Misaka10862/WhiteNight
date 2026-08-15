@@ -5,7 +5,7 @@
 - 中文名：**白夜**；昵称：**小白**；默认称呼用户：**主人**
 - 首版入口：本地 WebUI（优先）→ QQ 私聊（后续阶段）
 - 主脑：Ollama `qwen3-vl:8b`；复杂 GUI 任务委派 Hermes；编码任务委派 Codex
-- 当前阶段：**阶段 0 · 工程初始化**（空壳服务可启动、检查与测试通过）
+- 当前阶段：**阶段 2 · 最小纵向链路已打通**（WebUI 流式聊天、图片理解、会话保存与重启恢复）
 
 ## 仓库结构
 
@@ -27,14 +27,16 @@ scripts/         非破坏性开发与诊断脚本
 brew install uv
 uv python install 3.12
 uv sync --dev
-uv run alembic upgrade head
-uv run whitenight            # http://127.0.0.1:8765
+uv run whitenight            # 自动执行数据库迁移，http://127.0.0.1:8765
 
 # WebUI（另开终端）
 cd apps/web
 npm install
-npm run dev                  # http://127.0.0.1:5173
+npm run dev                  # http://127.0.0.1:5173，/api 与 WebSocket 已代理
 ```
+
+现在可以：连续文字聊天（流式）、发送图片让小白看图、关闭并重启后继续会话。
+聊天协议见 [docs/contracts/chat-ws.md](docs/contracts/chat-ws.md)。
 
 完整环境说明见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 

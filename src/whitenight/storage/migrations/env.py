@@ -19,12 +19,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# 应用内自动迁移通过 config.attributes 注入具体 Settings；
+# CLI 运行时回退到全局配置分层（环境变量 > YAML > 默认值）。
+settings = config.attributes.get("whitenight_settings") or load_settings()
+
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     """离线模式：仅生成 SQL，不连接数据库。"""
-    settings = load_settings()
     context.configure(
         url=settings.database_url,
         target_metadata=target_metadata,
@@ -37,7 +40,6 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """在线模式：按 URL 选择 sqlite3 或 sqlcipher3 驱动。"""
-    settings = load_settings()
     engine = build_engine(settings.database_url, key=resolve_database_key(settings.database_url))
 
     with engine.connect() as connection:

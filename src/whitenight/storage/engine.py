@@ -50,7 +50,7 @@ def build_engine(database_url: str, key: str | None = None) -> Engine:
 
     if backend == "sqlcipher":
         try:
-            import sqlcipher3  # type: ignore[import-not-found]
+            import sqlcipher3  # type: ignore[import-untyped]
         except ImportError as exc:
             raise StorageConfigurationError(
                 "使用 sqlcipher:// 需要安装可选依赖：uv sync --extra sqlcipher"
