@@ -60,3 +60,6 @@ model/data/
 # --- Local reference material (not part of the source tree) ---
 references_projects/
 开发日志.rtf
+
+# 本机私有配置（含 owner QQ 号等，不入库）
+config/whitenight.yaml
