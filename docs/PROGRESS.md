@@ -12,6 +12,8 @@
   `scripts/e2e_smoke.py --real-model` 实测通过（流式聊天/记忆/主动状态/备份）。
 - **NapCat 安装进行中**：官方 Mac 安装器 v1.5 已下载（arm64，zip 校验通过）、
   安装到 `/Applications/NapCatInstaller.app` 并已启动 GUI，等待用户操作与扫码。
+  后台已运行 `scripts/wait_for_napcat.py`（24h 超时）：检测到 WebUI/OneBot 启动
+  会发 macOS 通知提醒扫码。
   扫码后的 OneBot 上报与 owner 配置工具已备好：`scripts/configure_qq.py`、
   `scripts/qq_link_check.py` + `docs/NAPCAT.md`；`proactive_sender: qq` 已接通。
   已用 mock OneBot + 真实 qwen3:8b 验证 Adapter 全链路（事件→回复→send_private_msg）。
