@@ -152,9 +152,10 @@
 3. **cua-driver TCC 待授权**：`hermes computer-use doctor` 显示辅助功能与屏幕录制未授予；
    需用户在系统设置授权或运行 `hermes computer-use permissions grant`。
 4. **NapCat / QQ 进行中**：官方 Mac 安装器 v1.5 已下载（arm64，zip 校验通过）并安装到
-   `/Applications/NapCatInstaller.app`，GUI 已启动；待用户按窗口操作（安装→修改 QQ→
-   启动 NapCat）并扫码登录 QQ 小号。登录后还需在 NapCat WebUI 配置 OneBot 上报地址
-   `http://127.0.0.1:8765/api/v1/onebot/events`。
+   `/Applications/NapCatInstaller.app`，GUI 已启动。系统日志显示其自动代理检测持续收到
+   HTTP 403（GitHub 代理源），建议用户在安装器里手动选择代理或填写
+   `http://127.0.0.1:7897`（本机 Clash）后点安装。扫码后执行
+   `scripts/configure_qq.py`、`scripts/qq_link_check.py`（工具已就绪）。
 5. **真实 file.delete / screen.capture 未做系统级烟测**：分别需要 Finder 自动化与屏幕录制
    权限；单元/集成测试已用受控 fake 覆盖状态机与审计。
 6. **DuckDuckGo HTML 端点 202 反爬**：已用 DDG Lite + Bing 兜底解决并实测，但上游可能继续
