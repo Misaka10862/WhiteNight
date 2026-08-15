@@ -15,6 +15,11 @@
   扫码后的 OneBot 上报与 owner 配置工具已备好：`scripts/configure_qq.py`、
   `scripts/qq_link_check.py` + `docs/NAPCAT.md`；`proactive_sender: qq` 已接通。
   已用 mock OneBot + 真实 qwen3:8b 验证 Adapter 全链路（事件→回复→send_private_msg）。
+- **72 小时持续运行**：已启动（2026-08-15T08:42Z，`uv run scripts/run_72h.py --hours 72`），
+  WhiteNight 后端持续运行中；首检 ok（30ms）。日志 `data/logs/stability-72h.jsonl`。
+- **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
+  DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`
+  （当前模型无法读图，人工查看截图由用户完成）。
 
 ## 已完成
 
