@@ -112,9 +112,12 @@
 - 诊断脚本 `scripts/diagnostics.py`（DB 完整性/迁移/磁盘/Provider/待审批/日志）
 - 日志落盘 `data/logs/whitenight.log`（写入脱敏）+ `/api/v1/logs` + WebUI 日志页
 - 负载冒烟 `scripts/load_smoke.sh`；72h 巡检 `scripts/run_72h.py`（待用户执行）
+- 安全红队补充：提示注入不改变规则、web.fetch SSRF 防护、evals/security 黄金集
+- 性能冒烟（会话/上下文/检索/路由宽松阈值）与 `scripts/e2e_smoke.py`
+  （dummy 与 real-ollama 两种模式均通过）
 - `docs/INSTALL.md`、`docs/OPERATIONS.md`、`docs/RELEASE_CHECKLIST.md`
-- 125 passed / 4 skipped（含备份恢复、日志 API）
-- 报告：`docs/reports/phase10-verification.md`（随提交补齐）（随提交补齐）
+- 132 passed / 4 skipped（含备份恢复、日志 API、安全红队、性能）
+- 报告：`docs/reports/phase10-verification.md`（随提交补齐）
 
 ## 未完成（按构建计划阶段）
 

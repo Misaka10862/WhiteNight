@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -51,6 +52,21 @@ class SearchProvider(Protocol):
 
 class WebSearchError(RuntimeError):
     """搜索/页面提取失败。"""
+
+
+def is_private_or_loopback_url(url: str) -> bool:
+    """SSRF 防护：拒绝非 http(s) 与回环/私网地址。"""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return True
+    hostname = (parsed.hostname or "").lower()
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local or address.is_reserved
 
 
 class DuckDuckGoSearchProvider:
@@ -129,6 +145,8 @@ class DuckDuckGoSearchProvider:
         return results
 
     def fetch(self, url: str, max_chars: int = 12_000) -> FetchedPage:
+        if is_private_or_loopback_url(url):
+            raise WebSearchError("拒绝访问回环/私网地址")
         with self._client() as client:
             response = client.get(url)
             response.raise_for_status()
@@ -243,6 +261,8 @@ class WebFetchTool:
     def execute(self, context: ToolContext, params: ToolParameters) -> ToolResult:
         assert isinstance(params, WebFetchParams)
         del context
+        if is_private_or_loopback_url(params.url):
+            return ToolResult.failure("页面提取失败", "拒绝访问回环/私网地址（SSRF 防护）")
         try:
             page = self.provider.fetch(params.url, max_chars=params.max_chars)
         except Exception as exc:

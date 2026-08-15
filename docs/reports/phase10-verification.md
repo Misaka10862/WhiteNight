@@ -38,3 +38,14 @@
 - 72 小时持续运行 + 睡眠唤醒/网络中断实测。
 - 真实浏览器视觉回归；NapCat QQ 登录与真实链路；Hermes Provider 登录。
 - LoRA 训练/盲测选择默认模型；GitHub push（workflow scope）。
+
+## 6. 安全红队与性能（第 12 轮补充）
+
+- `evals/security/golden.jsonl` 8 项；新增提示注入不变更规则、SSRF 回环/私网
+  请求在 Provider 前拒绝；原有批量删除/审批重放/非 owner/附件 MIME/日志脱敏
+  全部纳入清单。
+- `tests/test_performance.py`：100 会话消息、200 消息上下文预算、200 事实 FTS、
+  100 次路由全部在宽松阈值内。
+- `scripts/e2e_smoke.py`：dummy 与 real-ollama 两种模式均通过（会话/流式聊天/
+  记忆/主动消息/加密备份）。
+- 最终 `uv run pytest`：132 passed, 4 skipped。
