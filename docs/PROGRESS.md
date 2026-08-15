@@ -14,6 +14,7 @@
   安装到 `/Applications/NapCatInstaller.app` 并已启动 GUI，等待用户操作与扫码。
   扫码后的 OneBot 上报与 owner 配置工具已备好：`scripts/configure_qq.py`、
   `scripts/qq_link_check.py` + `docs/NAPCAT.md`；`proactive_sender: qq` 已接通。
+  已用 mock OneBot + 真实 qwen3:8b 验证 Adapter 全链路（事件→回复→send_private_msg）。
 
 ## 已完成
 
