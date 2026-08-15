@@ -16,10 +16,15 @@ classifiers = [
 ]
 dependencies = [
     "alembic>=1.16,<2",
+    "beautifulsoup4>=4.13,<5",
     "fastapi>=0.116,<1",
     "httpx>=0.28,<1",
+    "openpyxl>=3.1,<4",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.10,<3",
+    "pymupdf>=1.26,<2",
+    "python-docx>=1.2,<2",
+    "python-pptx>=1.0,<2",
     "pyyaml>=6.0,<7",
     "sqlalchemy>=2.0.41,<3",
     "uvicorn[standard]>=0.35,<1",
@@ -41,6 +46,7 @@ dev = [
 # production database. The development/test stack uses plain SQLite.
 [project.optional-dependencies]
 sqlcipher = ["sqlcipher3>=0.6.2,<1"]
+ocr = ["ocrmac>=1.0.1,<2"]
 
 [build-system]
 requires = ["hatchling"]

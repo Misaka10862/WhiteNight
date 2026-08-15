@@ -68,6 +68,14 @@ PY
 
 把 `database_url` 改为 `sqlcipher:///data/whitenight.db` 后执行 `uv run alembic upgrade head`。
 
+### Apple Vision OCR（可选，图片与扫描 PDF）
+
+```bash
+uv sync --extra ocr
+```
+
+仅 macOS 有效；未安装时文档解析对图片返回明确错误而不是伪造内容。
+
 ## 2. 前端：React + Vite
 
 需要 Node.js 20+（开发机为 Homebrew 的 Node 26）。

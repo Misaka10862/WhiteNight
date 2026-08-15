@@ -1,1 +1,5 @@
-"""PDF、Office、OCR 与附件处理。（阶段 0 占位，按构建计划逐阶段实现）"""
+"""documents: PDF、Office、OCR、压缩包与文本解析。"""
+
+from whitenight.documents.dispatcher import ParsedDocument, parse_document
+
+__all__ = ["ParsedDocument", "parse_document"]

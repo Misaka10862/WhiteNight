@@ -73,3 +73,59 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     session: Mapped[Session] = relationship(back_populates="messages")
+
+
+class Approval(Base):
+    """一次性审批请求：短期、不可重放（构建计划第 9.2 节）。"""
+
+    __tablename__ = "approvals"
+    __table_args__ = (Index("ix_approvals_code", "code", unique=True),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default="once", nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", nullable=False
+    )  # pending|approved|rejected|revoked
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    channel: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    params_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    used_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SessionGrant(Base):
+    """按会话授权的工具类别（低风险写入等）。"""
+
+    __tablename__ = "session_grants"
+    __table_args__ = (Index("ix_session_grants_session_tool", "session_id", "tool_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuditEvent(Base):
+    """现实动作审计：执行者、参数摘要、审批记录、结果和时间。"""
+
+    __tablename__ = "audit_events"
+    __table_args__ = (Index("ix_audit_events_ts", "ts"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    actor: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    risk: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    params_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    result_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    channel: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
