@@ -5,8 +5,8 @@
 - 中文名：**白夜**；昵称：**小白**；默认称呼用户：**主人**
 - 首版入口：本地 WebUI（优先）→ QQ 私聊（后续阶段）
 - 主脑：Ollama `qwen3-vl:8b`；复杂 GUI 任务委派 Hermes；编码任务委派 Codex
-- 当前阶段：**阶段 10 · 发布加固核心完成**（加密备份恢复、诊断、日志、文档；72h 与 LoRA 盲测待用户）
-- 过程性文档（已完成/未完成/问题记录）：[docs/PROGRESS.md](docs/PROGRESS.md)
+- 当前阶段：**临时最小验证方案运行中**（qwen3:8b 文本模型 + SOUL.md 人格；LoRA 暂缓；NapCat 待扫码）
+- 过程性文档：[docs/PROGRESS.md](docs/PROGRESS.md) · 总览：[docs/FINAL_STATUS.md](docs/FINAL_STATUS.md)
 
 ## 仓库结构
 
