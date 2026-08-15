@@ -1,0 +1,62 @@
+# --- macOS ---
+.DS_Store
+*.icloud
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.prof
+
+# --- Node / WebUI ---
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- WhiteNight runtime data ---
+.env
+.env.*
+!.env.example
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+keychain_test_*
+
+# --- Secrets & keys ---
+*.pem
+*.key
+*.p12
+*.jks
+secrets/
+.keychain
+
+# --- Models & training data (never commit weights or corpora) ---
+model/weights/
+model/adapters/
+model/data/
+*.gguf
+*.safetensors
+*.bin
+!model/README.md
+
+# --- Local reference material (not part of the source tree) ---
+references_projects/
+开发日志.rtf

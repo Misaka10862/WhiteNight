@@ -1,0 +1,50 @@
+# WhiteNight · 小白
+
+本地优先的个人 AI 智能体。她既是主人的猫娘、恋人型陪伴者和亲密朋友，也是可以完成实际工作的桌面 Agent。
+
+- 中文名：**白夜**；昵称：**小白**；默认称呼用户：**主人**
+- 首版入口：本地 WebUI（优先）→ QQ 私聊（后续阶段）
+- 主脑：Ollama `qwen3-vl:8b`；复杂 GUI 任务委派 Hermes；编码任务委派 Codex
+- 当前阶段：**阶段 0 · 工程初始化**（空壳服务可启动、检查与测试通过）
+
+## 仓库结构
+
+```text
+apps/web/        React + TypeScript + Vite WebUI
+src/whitenight/  Python 后端（api/agent/routing/models/tools/...）
+tests/           pytest 单元与集成测试
+evals/           黄金评估集（人格/路由/记忆/文档/安全）
+model/           训练配置与数据规范（不存权重）
+docs/            ADR、协议契约与开发文档
+scripts/         非破坏性开发与诊断脚本
+构建计划.md      已确认的首版实施基线
+```
+
+## 快速开始
+
+```bash
+# 后端（macOS，需要 Homebrew）
+brew install uv
+uv python install 3.12
+uv sync --dev
+uv run alembic upgrade head
+uv run whitenight            # http://127.0.0.1:8765
+
+# WebUI（另开终端）
+cd apps/web
+npm install
+npm run dev                  # http://127.0.0.1:5173
+```
+
+完整环境说明见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+
+## 安全边界（阶段 0 已固化为代码与 ADR）
+
+- API 只监听 `127.0.0.1`；WebUI 只允许本机回环来源。
+- 数据库主密钥与服务凭据只进入 macOS Keychain；`sqlcipher://` 生产库需安装 `uv sync --extra sqlcipher`。
+- 日志默认脱敏；现实动作的权限/审批引擎独立于模型输出。
+- 模型权重、训练语料、密钥与数据库一律不进入 Git。
+
+## 许可证
+
+私有项目。依赖各自的许可证以 `uv.lock` / `package-lock.json` 为准，外部参考项目使用约束见构建计划第 21 节。

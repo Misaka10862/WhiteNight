@@ -1,0 +1,90 @@
+[project]
+name = "whitenight"
+version = "0.1.0"
+description = "WhiteNight（白夜）—— 本地优先的个人 AI 智能体"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "Misaka10862" }]
+keywords = ["agent", "local-first", "companion", "macos"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: MacOS X",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "alembic>=1.16,<2",
+    "fastapi>=0.116,<1",
+    "httpx>=0.28,<1",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.10,<3",
+    "pyyaml>=6.0,<7",
+    "sqlalchemy>=2.0.41,<3",
+    "uvicorn[standard]>=0.35,<1",
+]
+
+[project.scripts]
+whitenight = "whitenight.__main__:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16,<2",
+    "pytest>=8.4,<9",
+    "pytest-cov>=6.2,<8",
+    "ruff>=0.12,<1",
+    "types-pyyaml>=6.0",
+]
+
+# SQLCipher driver is intentionally optional: only needed for the encrypted
+# production database. The development/test stack uses plain SQLite.
+[project.optional-dependencies]
+sqlcipher = ["sqlcipher3-binary>=0.5.4,<1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whitenight"]
+
+[tool.uv]
+package = true
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",
+    "RUF001", # 中文全角逗号
+    "RUF002", # 中文全角冒号
+    "RUF003", # 中文全角分号
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["whitenight"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["whitenight"]
+exclude = ["tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["src"]

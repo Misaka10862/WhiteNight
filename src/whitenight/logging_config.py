@@ -1,0 +1,78 @@
+"""日志规范：统一入口、JSON 可选、默认脱敏。
+
+敏感模式覆盖：api_key、token、secret、password、authorization 及其常见变体。
+日志永远不直接打印数据库主密钥或服务凭据。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import logging.config
+import re
+from datetime import UTC, datetime
+from typing import Any
+
+# 命中 "authorization: Bearer xyz"、"password=abc"、"api_key" 这类形态。
+_SECRET_PATTERN = re.compile(
+    r"(?i)((?:api[_-]?key|auth(?:orization)?|token|secret|password|passwd|pwd|"
+    r"db[_-]?key|master[_-]?key)\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"',;]+)",
+)
+
+
+def redact(text: str) -> str:
+    """把敏感赋值右侧替换为 ``***``，保留键名便于排查。"""
+    return _SECRET_PATTERN.sub(r"\1***", text)
+
+
+class RedactingFilter(logging.Filter):
+    """对所有日志记录做值脱敏。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = redact(record.msg)
+            if record.args:
+                redacted_args = tuple(
+                    redact(arg) if isinstance(arg, str) else arg for arg in record.args
+                )
+                record.args = redacted_args
+        except Exception:  # 脱敏失败不应中断业务日志
+            pass
+        return True
+
+
+class JsonFormatter(logging.Formatter):
+    """结构化 JSON 行，供生产环境采集。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "ts": datetime.now(UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": redact(record.getMessage()),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def setup_logging(level: str = "INFO", json_logs: bool = False) -> None:
+    """幂等安装根日志配置。"""
+    formatter: logging.Formatter
+    if json_logs:
+        formatter = JsonFormatter()
+    else:
+        formatter = logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
+
+    handler: logging.Handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    handler.addFilter(RedactingFilter())
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(level.upper())
