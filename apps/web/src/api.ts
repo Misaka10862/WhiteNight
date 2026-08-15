@@ -129,6 +129,7 @@ export interface SystemHealth {
   database: { backend: string; reachable: boolean }
   model: Record<string, unknown>
   delegates: Record<string, Record<string, unknown>>
+  onebot?: { enabled: boolean; owner_ids: number[]; api_url: string }
 }
 
 export interface ProactiveConfig {

@@ -18,6 +18,10 @@ export default function ModelsPage() {
         </div>
       </div>
       <div className="panel">
+        <h3>QQ / OneBot</h3>
+        <pre className="pre">{JSON.stringify(health.data?.onebot ?? { enabled: false }, null, 2)}</pre>
+      </div>
+      <div className="panel">
         <h3>委派执行器</h3>
         <pre className="pre">{JSON.stringify(health.data?.delegates, null, 2)}</pre>
       </div>

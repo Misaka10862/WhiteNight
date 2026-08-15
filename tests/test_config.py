@@ -35,6 +35,13 @@ def test_env_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert settings.port == 1234
 
 
+def test_env_parses_json_lists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WHITENIGHT_QQ_OWNER_IDS", "[10001, 10002]")
+    settings = load_settings(Path(tmp_path / "missing.yaml"))
+    assert settings.qq_owner_ids == [10001, 10002]
+
+
 def test_malformed_yaml_raises(tmp_path: Path) -> None:
     config = tmp_path / "bad.yaml"
     config.write_text("app_env: [unclosed\n", encoding="utf-8")

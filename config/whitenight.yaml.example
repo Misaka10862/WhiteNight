@@ -48,3 +48,10 @@ proactive_quiet_end: "08:00"
 proactive_suppress_minutes: 60
 proactive_skip_grace_minutes: 45
 proactive_sender: log           # log | none（QQ 在阶段 8 接入）
+
+# QQ / OneBot（阶段 8；NapCat 登录需要用户操作）
+qq_enabled: false
+qq_owner_ids: []                # 例：[10001]
+qq_onebot_api_url: http://127.0.0.1:3000
+qq_rate_limit_seconds: 2.0
+qq_reply_max_chars: 4000

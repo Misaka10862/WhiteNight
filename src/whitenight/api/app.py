@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from whitenight import __version__
 from whitenight.agent.context import load_soul
 from whitenight.agent.service import ChatService, create_chat_service
+from whitenight.channels.onebot import ChannelSessionStore, OneBotAdapter, OneBotSender
 from whitenight.channels.types import (
     ChatEvent,
     ChatRequest,
@@ -148,6 +149,24 @@ def create_app(
             rule_router=RuleRouter(),
             llm_router=OllamaRoutingRouter(provider),
         )
+        chat_service = create_chat_service(
+            store,
+            provider,
+            settings,
+            memory_service,
+            router,
+            delegate_manager,
+            proactive_service,
+        )
+        channel_sessions = ChannelSessionStore(engine, store)
+        onebot_adapter = OneBotAdapter(
+            settings,
+            store,
+            channel_sessions,
+            chat_service,
+            approvals,
+            OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars),
+        )
         _app.state.engine = engine
         _app.state.store = store
         _app.state.memory_service = memory_service
@@ -157,15 +176,9 @@ def create_app(
         _app.state.proactive_service = proactive_service
         _app.state.task_store = task_store
         _app.state.delegate_manager = delegate_manager
-        _app.state.chat_service = create_chat_service(
-            store,
-            provider,
-            settings,
-            memory_service,
-            router,
-            delegate_manager,
-            proactive_service,
-        )
+        _app.state.channel_sessions = channel_sessions
+        _app.state.onebot_adapter = onebot_adapter
+        _app.state.chat_service = chat_service
         yield
         proactive_stop.set()
         try:
@@ -355,6 +368,11 @@ def create_app(
             },
             "model": model_status,
             "delegates": delegate_status,
+            "onebot": {
+                "enabled": app.state.onebot_adapter.enabled(),
+                "owner_ids": app.state.onebot_adapter.owner_ids(),
+                "api_url": settings.qq_onebot_api_url,
+            },
         }
 
     @app.get("/api/v1/rules/{name}", response_class=PlainTextResponse)
@@ -485,6 +503,22 @@ def create_app(
         await manager.abort(task_id)
         task_store: TaskStore = app.state.task_store
         return task_store.get(task_id)
+
+    # ---- OneBot / QQ（阶段 8） ------------------------------------------
+
+    @app.post("/api/v1/onebot/events")
+    async def onebot_events(payload: dict[str, object]) -> dict[str, object]:
+        adapter: OneBotAdapter = app.state.onebot_adapter
+        return await adapter.handle_event(payload)
+
+    @app.get("/api/v1/onebot/status")
+    async def onebot_status() -> dict[str, object]:
+        adapter: OneBotAdapter = app.state.onebot_adapter
+        return {
+            "enabled": adapter.enabled(),
+            "owner_ids": adapter.owner_ids(),
+            "api_url": settings.qq_onebot_api_url,
+        }
 
     @app.websocket("/api/v1/chat/ws")
     async def chat_ws(websocket: WebSocket) -> None:

@@ -240,3 +240,19 @@ class ProactiveState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class ChannelSession(Base):
+    """渠道 → 统一会话映射：QQ 与 WebUI 共享同一会话/记忆/任务。"""
+
+    __tablename__ = "channel_sessions"
+    __table_args__ = (Index("ix_channel_sessions_lookup", "channel", "owner_key", unique=True),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

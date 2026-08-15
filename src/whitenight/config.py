@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -63,6 +64,13 @@ class Settings(BaseSettings):
     proactive_skip_grace_minutes: int = 45
     proactive_sender: Literal["log", "none"] = "log"
 
+    # QQ / OneBot（阶段 8；NapCat 登录需要用户操作）
+    qq_enabled: bool = False
+    qq_owner_ids: list[int] = Field(default_factory=list)  # 所有者 QQ 号白名单
+    qq_onebot_api_url: str = "http://127.0.0.1:3000"
+    qq_rate_limit_seconds: float = 2.0
+    qq_reply_max_chars: int = 4000
+
     def ensure_dirs(self) -> None:
         """创建运行时目录（数据、日志、备份）。"""
         for directory in (self.data_dir, self.data_dir / "logs", self.data_dir / "backups"):
@@ -85,11 +93,18 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 def _env_overrides() -> dict[str, Any]:
     prefix = "WHITENIGHT_"
-    return {
-        key[len(prefix) :].lower(): value
-        for key, value in os.environ.items()
-        if key.startswith(prefix)
-    }
+    values: dict[str, Any] = {}
+    for key, value in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        parsed: Any = value
+        if value.startswith(("[", "{")):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                parsed = value
+        values[key[len(prefix) :].lower()] = parsed
+    return values
 
 
 def load_settings(config_path: Path | None = None) -> Settings:
