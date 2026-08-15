@@ -98,7 +98,12 @@ def create_app(
 ) -> FastAPI:
     """构建应用。测试可注入临时 Settings、Fake Provider 与记忆提取器。"""
     settings = settings or load_settings()
-    setup_logging(level=settings.log_level, json_logs=settings.log_json)
+    settings.ensure_dirs()
+    setup_logging(
+        level=settings.log_level,
+        json_logs=settings.log_json,
+        log_file=str(settings.data_dir / "logs" / "whitenight.log"),
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -519,6 +524,13 @@ def create_app(
             "owner_ids": adapter.owner_ids(),
             "api_url": settings.qq_onebot_api_url,
         }
+
+    @app.get("/api/v1/logs", response_class=PlainTextResponse)
+    async def read_logs(lines: int = Query(default=100, ge=1, le=1000)) -> str:
+        path = settings.data_dir / "logs" / "whitenight.log"
+        if not path.exists():
+            return ""
+        return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
 
     @app.websocket("/api/v1/chat/ws")
     async def chat_ws(websocket: WebSocket) -> None:

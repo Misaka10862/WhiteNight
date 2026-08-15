@@ -11,6 +11,7 @@ import logging
 import logging.config
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 # 命中 "authorization: Bearer xyz"、"password=abc"、"api_key" 这类形态。
@@ -57,8 +58,12 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
-def setup_logging(level: str = "INFO", json_logs: bool = False) -> None:
-    """幂等安装根日志配置。"""
+def setup_logging(
+    level: str = "INFO",
+    json_logs: bool = False,
+    log_file: str | None = None,
+) -> None:
+    """幂等安装根日志配置。log_file 与 stdout 都经过同一脱敏过滤器。"""
     formatter: logging.Formatter
     if json_logs:
         formatter = JsonFormatter()
@@ -68,11 +73,20 @@ def setup_logging(level: str = "INFO", json_logs: bool = False) -> None:
             datefmt="%Y-%m-%dT%H:%M:%S%z",
         )
 
-    handler: logging.Handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-    handler.addFilter(RedactingFilter())
-
     root = logging.getLogger()
     root.handlers.clear()
-    root.addHandler(handler)
+
+    stream_handler: logging.Handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(RedactingFilter())
+    root.addHandler(stream_handler)
+
+    if log_file:
+        path = Path(log_file).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(path, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        file_handler.addFilter(RedactingFilter())
+        root.addHandler(file_handler)
+
     root.setLevel(level.upper())

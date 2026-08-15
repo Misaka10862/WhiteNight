@@ -273,6 +273,11 @@ export const pauseProactive = (until?: string | null) =>
   })
 export const resumeProactive = () =>
   jsonFetch<ProactiveStatus>('/api/v1/proactive/resume', { method: 'POST' })
+export async function fetchLogs(lines = 200): Promise<string> {
+  const response = await fetch(`/api/v1/logs?lines=${lines}`)
+  if (!response.ok) throw new Error(`logs failed: ${response.status}`)
+  return response.text()
+}
 export const fetchRuleFile = async (name: 'SOUL' | 'AGENTS'): Promise<string> => {
   const response = await fetch(`/api/v1/rules/${name}`)
   if (!response.ok) throw new Error(`rule ${name} failed: ${response.status}`)

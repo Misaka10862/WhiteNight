@@ -75,3 +75,9 @@ def test_system_health(client: TestClient) -> None:
     assert health["database"]["reachable"] is True
     assert "model" in health
     assert set(health["delegates"]) == {"codex", "hermes"}
+
+
+def test_logs_endpoint(client: TestClient, settings) -> None:
+    response = client.get("/api/v1/logs")
+    assert response.status_code == 200
+    assert (settings.data_dir / "logs" / "whitenight.log").exists()

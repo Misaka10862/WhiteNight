@@ -3,12 +3,12 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（第 10 轮，阶段 9 准备）
+最后更新：2026-08-15（第 11 轮，阶段 10）
 
 ## 当前阶段
 
-- **阶段 9 · LoRA 人格固化**：离线工具链就绪；训练/盲测需租用 GPU 与用户裁决，已记录为阻塞。
-- 下一阶段：**阶段 10 · 发布加固**（不依赖 LoRA 的部分先行）。
+- **阶段 10 · 发布加固**：备份恢复/诊断/日志/文档已完成；72h 长时测试与 LoRA 盲测待用户。
+- 全部 10 个阶段中 0-8 完成，9 待 GPU/用户，10 核心完成。
 
 ## 已完成
 
@@ -103,7 +103,18 @@
 - `scripts/eval_persona.py`：基线 qwen3-vl 实测通过率 1.00（自动判定，阈值 0.6）
 - `scripts/blind_ab.py`：匿名 A/B 盲测与 reveal；`scripts/run_model_regression.sh`
 - **阻塞**：实际 QLoRA 需要租用 GPU；语料审阅与盲测需要用户参与。
-  未完成训练前阶段 9 不标记 ✅，不影响阶段 10 先行。（随提交补齐）
+  未完成训练前阶段 9 不标记 ✅，不影响阶段 10 先行。
+
+### 阶段 10 · 发布加固 —— 核心完成 ✅，长时测试待用户
+- 加密备份/恢复：WNBK1 + PBKDF2 + Fernet；SQLite online backup + attachments；
+  verify/preview/restore（恢复前拒绝服务运行，自动安全备份与失败回滚）
+- 实测：临时库备份→预览→恢复替换；dev 库真实加密备份 9.9KB 且 verify/preview 通过
+- 诊断脚本 `scripts/diagnostics.py`（DB 完整性/迁移/磁盘/Provider/待审批/日志）
+- 日志落盘 `data/logs/whitenight.log`（写入脱敏）+ `/api/v1/logs` + WebUI 日志页
+- 负载冒烟 `scripts/load_smoke.sh`；72h 巡检 `scripts/run_72h.py`（待用户执行）
+- `docs/INSTALL.md`、`docs/OPERATIONS.md`、`docs/RELEASE_CHECKLIST.md`
+- 125 passed / 4 skipped（含备份恢复、日志 API）
+- 报告：`docs/reports/phase10-verification.md`（随提交补齐）（随提交补齐）
 
 ## 未完成（按构建计划阶段）
 
@@ -114,7 +125,7 @@
 | 7 | launchd 后台服务、泊松主动消息调度 | ✅ 核心完成（真实发送器 QQ 在阶段 8） |
 | 8 | QQ 私聊（OneBot Adapter） | ✅ 核心完成（NapCat 登录待用户） |
 | 9 | LoRA 人格固化 | ⚠️ 离线工具链就绪；训练需 GPU + 用户盲测 |
-| 10 | 发布加固（72h、备份恢复演练、文档） | 待开始 |
+| 10 | 发布加固（72h、备份恢复演练、文档） | ✅ 核心完成；72h/盲测待用户 |
 | 7 | launchd 后台服务、泊松主动消息调度 | 待开始 |
 | 8 | QQ 私聊（NapCat + OneBot Adapter） | 待开始 |
 | 9 | LoRA 人格固化 | 待开始 |
@@ -153,13 +164,14 @@
 11. **WebUI 未做真实浏览器视觉回归**：已通过 tsc/eslint/build、Vite 代理全链路与 API 工作流
     验证；窄窗口/键盘/无障碍需要用户在本机打开 `npm run dev` 做一次人工确认。
 
-## 下一步（阶段 10 计划）
+## 下一步（收尾清单）
 
-1. 全量测试：单元/集成/E2E、权限红队、性能与稳定性。
-2. 备份/恢复：加密全量备份、增量备份、恢复预览与恢复演练脚本。
-3. 诊断工具：数据库迁移/升级回滚、日志查看与脱敏导出。
-4. 72 小时持续运行测试（需要用户机器长期运行）。
-5. 安装/首次启动/权限授予/QQ 配置/故障处理文档固化。
+1. 用户执行 `uv run scripts/run_72h.py --hours 72` 与真实睡眠唤醒测试。
+2. 用户在开发机打开 WebUI 做视觉回归与窄窗口确认。
+3. 用户安装 NapCat 并扫码 QQ 小号，跑真实 QQ 链路。
+4. 用户登录 Hermes Provider，跑真实任务链路契约测试。
+5. 用户确认租用 GPU 计划，完成 LoRA 训练与盲测并选择默认模型。
+6. 用户执行 `gh auth refresh -s workflow && git push -u origin main`。
 
 ## 验证命令
 

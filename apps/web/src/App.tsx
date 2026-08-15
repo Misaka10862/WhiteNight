@@ -9,6 +9,7 @@ import PermissionsPage from './pages/PermissionsPage'
 import ModelsPage from './pages/ModelsPage'
 import RulesPage from './pages/RulesPage'
 import ProactivePage from './pages/ProactivePage'
+import LogsPage from './pages/LogsPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 
 type Tab = 'chat' | 'sessions' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'rules' | 'active' | 'logs' | 'backup'
@@ -114,9 +115,7 @@ export default function App() {
           {tab === 'models' && <ModelsPage />}
           {tab === 'rules' && <RulesPage />}
           {tab === 'active' && <ProactivePage />}
-          {tab === 'logs' && (
-            <PlaceholderPage title="运行日志" description="日志查看与脱敏导出随诊断工具在阶段 10 接入。" />
-          )}
+          {tab === 'logs' && <LogsPage />}
           {tab === 'backup' && (
             <PlaceholderPage title="备份与恢复" description="加密全量/增量备份与恢复演练在阶段 10 接入。" />
           )}

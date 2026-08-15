@@ -471,6 +471,12 @@ textarea {
   background: #faf9f6;
 }
 
+.log-view {
+  min-height: 300px;
+  max-height: 60vh;
+  font-size: 12px;
+}
+
 .link {
   border: none;
   background: transparent;
