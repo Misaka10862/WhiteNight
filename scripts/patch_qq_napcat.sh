@@ -40,7 +40,12 @@ fi
 if [[ -f "$BAK" ]]; then
   echo "备份已存在，跳过备份：$BAK"
 else
-  sudo cp "$PKG" "$BAK"
+  if ! sudo cp "$PKG" "$BAK"; then
+    echo "备份失败。如果提示 Operation not permitted："
+    echo "请打开「系统设置 → 隐私与安全性 → App 管理」，添加并允许当前终端应用，"
+    echo "然后重新运行本脚本。"
+    exit 1
+  fi
   echo "已备份：$BAK"
 fi
 
