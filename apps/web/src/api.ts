@@ -131,6 +131,24 @@ export interface SystemHealth {
   delegates: Record<string, Record<string, unknown>>
 }
 
+export interface ProactiveConfig {
+  enabled: boolean
+  expected_per_day: number
+  quiet_start: string
+  quiet_end: string
+  suppress_minutes: number
+  skip_grace_minutes: number
+}
+
+export interface ProactiveStatus {
+  config: ProactiveConfig
+  paused: boolean
+  paused_until: string | null
+  last_activity_at: string | null
+  last_sent_at: string | null
+  next_candidate_at: string | null
+}
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
@@ -239,6 +257,21 @@ export const fetchSessionGrants = () =>
 export const revokeGrant = (id: string) =>
   jsonFetch<void>(`/api/v1/policy/grants/${id}`, { method: 'DELETE' })
 export const fetchSystemHealth = () => jsonFetch<SystemHealth>('/api/v1/system/health')
+export const fetchProactiveStatus = () => jsonFetch<ProactiveStatus>('/api/v1/proactive/status')
+export const updateProactiveConfig = (config: ProactiveConfig) =>
+  jsonFetch<ProactiveStatus>('/api/v1/proactive/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+export const pauseProactive = (until?: string | null) =>
+  jsonFetch<ProactiveStatus>('/api/v1/proactive/pause', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ until: until ?? null }),
+  })
+export const resumeProactive = () =>
+  jsonFetch<ProactiveStatus>('/api/v1/proactive/resume', { method: 'POST' })
 export const fetchRuleFile = async (name: 'SOUL' | 'AGENTS'): Promise<string> => {
   const response = await fetch(`/api/v1/rules/${name}`)
   if (!response.ok) throw new Error(`rule ${name} failed: ${response.status}`)

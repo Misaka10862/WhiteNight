@@ -8,6 +8,7 @@ import ApprovalsPage from './pages/ApprovalsPage'
 import PermissionsPage from './pages/PermissionsPage'
 import ModelsPage from './pages/ModelsPage'
 import RulesPage from './pages/RulesPage'
+import ProactivePage from './pages/ProactivePage'
 import PlaceholderPage from './pages/PlaceholderPage'
 
 type Tab = 'chat' | 'sessions' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'rules' | 'active' | 'logs' | 'backup'
@@ -112,9 +113,7 @@ export default function App() {
           {tab === 'permissions' && <PermissionsPage />}
           {tab === 'models' && <ModelsPage />}
           {tab === 'rules' && <RulesPage />}
-          {tab === 'active' && (
-            <PlaceholderPage title="主动消息" description="泊松调度、静默时段与暂停在阶段 7 接入。" />
-          )}
+          {tab === 'active' && <ProactivePage />}
           {tab === 'logs' && (
             <PlaceholderPage title="运行日志" description="日志查看与脱敏导出随诊断工具在阶段 10 接入。" />
           )}

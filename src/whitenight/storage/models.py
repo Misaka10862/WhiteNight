@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -211,6 +211,32 @@ class AgentTask(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class ProactiveState(Base):
+    """主动消息调度单例状态：频率、静默时段、暂停与最近活动抑制。"""
+
+    __tablename__ = "proactive_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    expected_per_day: Mapped[float] = mapped_column(Float, default=1.5, nullable=False)
+    quiet_start: Mapped[str] = mapped_column(String(5), default="23:00", nullable=False)
+    quiet_end: Mapped[str] = mapped_column(String(5), default="08:00", nullable=False)
+    suppress_minutes: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    skip_grace_minutes: Mapped[int] = mapped_column(Integer, default=45, nullable=False)
+    paused: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_candidate_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )

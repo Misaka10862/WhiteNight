@@ -39,3 +39,12 @@ embedding_model: ""
 hermes_gateway_url: http://127.0.0.1:9119
 codex_command: codex
 codex_timeout_s: 1800
+
+# 主动消息默认值（阶段 7，WebUI 可改并持久化）
+proactive_enabled: false
+proactive_expected_per_day: 1.5
+proactive_quiet_start: "23:00"
+proactive_quiet_end: "08:00"
+proactive_suppress_minutes: 60
+proactive_skip_grace_minutes: 45
+proactive_sender: log           # log | none（QQ 在阶段 8 接入）

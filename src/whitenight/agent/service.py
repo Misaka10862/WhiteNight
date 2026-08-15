@@ -18,6 +18,7 @@ from whitenight.memory.service import MemoryService
 from whitenight.models.base import ModelChunk, ModelProvider, ProviderMessage
 from whitenight.routing.engine import RoutingEngine
 from whitenight.routing.models import ExecutorChoice
+from whitenight.scheduler.service import ProactiveService
 from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
 
@@ -35,6 +36,7 @@ class ChatService:
         memory_service: MemoryService | None = None,
         router: RoutingEngine | None = None,
         delegate_manager: DelegateManager | None = None,
+        proactive_service: ProactiveService | None = None,
     ) -> None:
         self._store = store
         self._provider = provider
@@ -42,6 +44,7 @@ class ChatService:
         self._memory = memory_service
         self._router = router or RoutingEngine()
         self._delegates = delegate_manager
+        self._proactive = proactive_service
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -79,6 +82,8 @@ class ChatService:
             image_path=image_path,
             image_mime=image_mime,
         )
+        if self._proactive is not None:
+            self._proactive.mark_activity()
         yield ChatEvent(type="start", session_id=session_id)
 
         plan = await self._router.route(request.text, has_image=image_path is not None)
@@ -227,6 +232,7 @@ def create_chat_service(
     memory_service: MemoryService | None = None,
     router: RoutingEngine | None = None,
     delegate_manager: DelegateManager | None = None,
+    proactive_service: ProactiveService | None = None,
 ) -> ChatService:
     """Provider 未配置或测试注入时降级为 DummyProvider（开发环境显式选择）。"""
     return ChatService(
@@ -236,4 +242,5 @@ def create_chat_service(
         memory_service,
         router,
         delegate_manager,
+        proactive_service,
     )

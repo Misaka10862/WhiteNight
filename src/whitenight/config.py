@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     codex_command: str = "codex"
     codex_timeout_s: float = 1800.0
 
+    # 主动消息默认值（阶段 7；运行时可从 WebUI 改并持久化）
+    proactive_enabled: bool = False
+    proactive_expected_per_day: float = 1.5  # 首版默认每天约 1-2 次
+    proactive_quiet_start: str = "23:00"
+    proactive_quiet_end: str = "08:00"
+    proactive_suppress_minutes: int = 60
+    proactive_skip_grace_minutes: int = 45
+    proactive_sender: Literal["log", "none"] = "log"
+
     def ensure_dirs(self) -> None:
         """创建运行时目录（数据、日志、备份）。"""
         for directory in (self.data_dir, self.data_dir / "logs", self.data_dir / "backups"):

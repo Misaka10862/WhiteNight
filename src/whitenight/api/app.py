@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -54,6 +55,8 @@ from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import PolicyEngine
 from whitenight.routing.engine import OllamaRoutingRouter, RoutingEngine
 from whitenight.routing.rules import RuleRouter
+from whitenight.scheduler import LogSender, NullSender, ProactiveService, ProactiveStore
+from whitenight.scheduler.types import PauseRequest, ProactiveConfig, ProactiveStatus
 from whitenight.storage.engine import backend_of, build_engine, ping, resolve_database_key
 from whitenight.storage.migrate import upgrade_to_head
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
@@ -122,6 +125,17 @@ def create_app(
             else NullEmbeddingProvider()
         )
         memory_service = MemoryService(MemoryStore(engine), extractor, embedding_provider, audit)
+        proactive_store = ProactiveStore(engine)
+        proactive_sender = (
+            LogSender(settings.data_dir / "logs" / "proactive.jsonl")
+            if settings.proactive_sender == "log"
+            else NullSender()
+        )
+        proactive_service = ProactiveService(
+            proactive_store, provider, memory_service, proactive_sender, settings
+        )
+        proactive_stop = asyncio.Event()
+        proactive_task = asyncio.create_task(proactive_service.run_forever(proactive_stop))
         task_store = TaskStore(engine)
         delegate_manager = DelegateManager(
             task_store,
@@ -140,12 +154,25 @@ def create_app(
         _app.state.approvals = approvals
         _app.state.audit = audit
         _app.state.policy = PolicyEngine()
+        _app.state.proactive_service = proactive_service
         _app.state.task_store = task_store
         _app.state.delegate_manager = delegate_manager
         _app.state.chat_service = create_chat_service(
-            store, provider, settings, memory_service, router, delegate_manager
+            store,
+            provider,
+            settings,
+            memory_service,
+            router,
+            delegate_manager,
+            proactive_service,
         )
         yield
+        proactive_stop.set()
+        try:
+            await asyncio.wait_for(proactive_task, timeout=10)
+        except TimeoutError:
+            proactive_task.cancel()
+            await asyncio.gather(proactive_task, return_exceptions=True)
         engine.dispose()
 
     app = FastAPI(
@@ -285,6 +312,26 @@ def create_app(
     async def revoke_grant(grant_id: str) -> None:
         service: ApprovalService = app.state.approvals
         service.revoke_session_grant(grant_id)
+
+    @app.get("/api/v1/proactive/status", response_model=ProactiveStatus)
+    async def proactive_status() -> ProactiveStatus:
+        service: ProactiveService = app.state.proactive_service
+        return service.status()
+
+    @app.put("/api/v1/proactive/config", response_model=ProactiveStatus)
+    async def proactive_config(payload: ProactiveConfig) -> ProactiveStatus:
+        service: ProactiveService = app.state.proactive_service
+        return service.update_config(payload)
+
+    @app.post("/api/v1/proactive/pause", response_model=ProactiveStatus)
+    async def proactive_pause(payload: PauseRequest) -> ProactiveStatus:
+        service: ProactiveService = app.state.proactive_service
+        return service.pause(payload)
+
+    @app.post("/api/v1/proactive/resume", response_model=ProactiveStatus)
+    async def proactive_resume() -> ProactiveStatus:
+        service: ProactiveService = app.state.proactive_service
+        return service.resume()
 
     @app.get("/api/v1/system/health")
     async def system_health() -> dict[str, object]:
