@@ -150,6 +150,9 @@ class DelegateManager:
         self._max_retries = max(0, max_retries)
         self._retry_delay_s = retry_delay_s
 
+    def providers(self) -> dict[str, DelegateProvider]:
+        return dict(self._providers)
+
     async def run(
         self,
         *,

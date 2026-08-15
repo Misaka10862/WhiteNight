@@ -31,6 +31,19 @@ class ApprovalRequest:
     tool_name: str
     risk: str
     scope: str
+    params_summary: str
+    session_id: str | None
+    channel: str | None
+    created_at: datetime
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class SessionGrantRecord:
+    id: str
+    session_id: str
+    tool_name: str
+    created_at: datetime
     expires_at: datetime | None
 
 
@@ -85,6 +98,10 @@ class ApprovalService:
                 tool_name=approval.tool_name,
                 risk=approval.risk,
                 scope=approval.scope,
+                params_summary=approval.params_summary,
+                session_id=approval.session_id,
+                channel=approval.channel,
+                created_at=approval.created_at,
                 expires_at=approval.expires_at,
             )
 
@@ -151,7 +168,10 @@ class ApprovalService:
     def list_pending(self, limit: int = 20) -> list[ApprovalRequest]:
         with self._orm() as orm:
             rows = orm.scalars(
-                select(Approval).where(Approval.status == "pending").limit(limit)
+                select(Approval)
+                .where(Approval.status == "pending")
+                .order_by(Approval.created_at.desc())
+                .limit(limit)
             ).all()
             return [
                 ApprovalRequest(
@@ -160,7 +180,49 @@ class ApprovalService:
                     tool_name=row.tool_name,
                     risk=row.risk,
                     scope=row.scope,
+                    params_summary=row.params_summary,
+                    session_id=row.session_id,
+                    channel=row.channel,
+                    created_at=row.created_at,
                     expires_at=row.expires_at,
                 )
                 for row in rows
             ]
+
+    def reject(self, code: str) -> Resolution:
+        """拒绝审批：拒绝只消费编号，不产生任何授权。"""
+        now = _now()
+        with self._orm() as orm:
+            approval = orm.scalar(select(Approval).where(Approval.code == code))
+            if approval is None:
+                return Resolution(False, "once", "审批编号不存在")
+            if approval.status != "pending":
+                return Resolution(False, "once", f"审批已处理或不可用（{approval.status}）")
+            approval.status = "rejected"
+            approval.decided_at = now
+            approval.used_count = 1
+            orm.commit()
+            return Resolution(True, approval.scope, "已拒绝", approval.id)
+
+    def list_session_grants(self, limit: int = 100) -> list[SessionGrantRecord]:
+        with self._orm() as orm:
+            rows = orm.scalars(
+                select(SessionGrant).order_by(SessionGrant.created_at.desc()).limit(limit)
+            ).all()
+            return [
+                SessionGrantRecord(
+                    id=row.id,
+                    session_id=row.session_id,
+                    tool_name=row.tool_name,
+                    created_at=row.created_at,
+                    expires_at=row.expires_at,
+                )
+                for row in rows
+            ]
+
+    def revoke_session_grant(self, grant_id: str) -> None:
+        with self._orm() as orm:
+            grant = orm.get(SessionGrant, grant_id)
+            if grant is not None:
+                orm.delete(grant)
+                orm.commit()

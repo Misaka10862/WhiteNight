@@ -26,6 +26,7 @@ def settings(tmp_path) -> Settings:
         log_level="WARNING",
         auto_migrate=False,
         memory_extractor="none",
+        soul_file=tmp_path / "SOUL.md",
     )
 
 

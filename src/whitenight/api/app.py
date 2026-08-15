@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +15,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ValidationError
 
 from whitenight import __version__
+from whitenight.agent.context import load_soul
 from whitenight.agent.service import ChatService, create_chat_service
 from whitenight.channels.types import (
     ChatEvent,
@@ -47,7 +49,9 @@ from whitenight.memory.types import (
 )
 from whitenight.models.base import ModelProvider
 from whitenight.models.ollama import OllamaProvider
+from whitenight.policy.approvals import ApprovalService, SessionGrantRecord
 from whitenight.policy.audit import AuditService
+from whitenight.policy.engine import PolicyEngine
 from whitenight.routing.engine import OllamaRoutingRouter, RoutingEngine
 from whitenight.routing.rules import RuleRouter
 from whitenight.storage.engine import backend_of, build_engine, ping, resolve_database_key
@@ -61,6 +65,18 @@ class ExtractRequest(BaseModel):
 
 class ResolveRequest(BaseModel):
     keep: bool = True
+
+
+class SessionRename(BaseModel):
+    title: str
+
+
+class ApprovalAction(BaseModel):
+    session_id: str | None = None
+
+
+class RuleUpdate(BaseModel):
+    content: str
 
 
 def _build_memory_extractor(settings: Settings, provider: ModelProvider) -> MemoryExtractor:
@@ -98,6 +114,7 @@ def create_app(
             base_url=settings.ollama_base_url, model=settings.model_name
         )
         audit = AuditService(engine)
+        approvals = ApprovalService(engine)
         extractor = memory_extractor or _build_memory_extractor(settings, provider)
         embedding_provider = (
             OllamaEmbeddingProvider(settings.ollama_base_url, settings.embedding_model)
@@ -120,6 +137,9 @@ def create_app(
         _app.state.engine = engine
         _app.state.store = store
         _app.state.memory_service = memory_service
+        _app.state.approvals = approvals
+        _app.state.audit = audit
+        _app.state.policy = PolicyEngine()
         _app.state.task_store = task_store
         _app.state.delegate_manager = delegate_manager
         _app.state.chat_service = create_chat_service(
@@ -198,6 +218,116 @@ def create_app(
             return store.list_messages(session_id)
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="会话不存在") from exc
+
+    @app.patch("/api/v1/sessions/{session_id}", response_model=SessionSummary)
+    async def rename_session(session_id: str, payload: SessionRename) -> SessionSummary:
+        store: SessionStore = app.state.store
+        try:
+            return store.rename_session(session_id, payload.title)
+        except SessionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="会话不存在") from exc
+
+    @app.delete("/api/v1/sessions/{session_id}", status_code=204)
+    async def delete_session(session_id: str) -> None:
+        store: SessionStore = app.state.store
+        audit: AuditService = app.state.audit
+        try:
+            store.delete_session(session_id)
+        except SessionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="会话不存在") from exc
+        audit.record(
+            actor="user",
+            action="session.deleted",
+            decision="approved",
+            params_summary=f"session_id={session_id}",
+            result_summary="已删除（正文不入审计）",
+        )
+
+    @app.get("/api/v1/sessions/{session_id}/export", response_class=PlainTextResponse)
+    async def export_session(
+        session_id: str, fmt: str = Query(default="markdown", pattern="^(markdown|jsonl)$")
+    ) -> str:
+        store: SessionStore = app.state.store
+        return store.export_session(session_id, fmt)
+
+    # ---- 审批与权限（WebUI 阶段 6） ------------------------------------
+
+    @app.get("/api/v1/approvals/pending")
+    async def list_pending_approvals() -> list[dict[str, object]]:
+        service: ApprovalService = app.state.approvals
+        return [item.__dict__ for item in service.list_pending()]
+
+    @app.post("/api/v1/approvals/{code}/approve")
+    async def approve_request(code: str, payload: ApprovalAction) -> dict[str, object]:
+        service: ApprovalService = app.state.approvals
+        pending = [item for item in service.list_pending() if item.code == code]
+        scope = pending[0].scope if pending else "once"
+        resolution = service.resolve_once(code, session_id=payload.session_id, expected_scope=scope)
+        return {"ok": resolution.ok, "reason": resolution.reason, "scope": resolution.scope}
+
+    @app.post("/api/v1/approvals/{code}/reject")
+    async def reject_request(code: str) -> dict[str, object]:
+        service: ApprovalService = app.state.approvals
+        resolution = service.reject(code)
+        return {"ok": resolution.ok, "reason": resolution.reason}
+
+    @app.get("/api/v1/policy/rules")
+    async def policy_rules() -> list[dict[str, str]]:
+        policy: PolicyEngine = app.state.policy
+        return [{"tool": name, "risk": risk.value} for name, risk in sorted(policy.rules().items())]
+
+    @app.get("/api/v1/policy/grants", response_model=list[SessionGrantRecord])
+    async def session_grants() -> list[SessionGrantRecord]:
+        service: ApprovalService = app.state.approvals
+        return service.list_session_grants()
+
+    @app.delete("/api/v1/policy/grants/{grant_id}", status_code=204)
+    async def revoke_grant(grant_id: str) -> None:
+        service: ApprovalService = app.state.approvals
+        service.revoke_session_grant(grant_id)
+
+    @app.get("/api/v1/system/health")
+    async def system_health() -> dict[str, object]:
+        engine = app.state.engine
+        provider = app.state.chat_service.provider
+        model_status: dict[str, object]
+        try:
+            model_status = await provider.health()
+        except Exception as exc:
+            model_status = {"error": str(exc)}
+        delegate_status: dict[str, object] = {}
+        for name, delegate in app.state.delegate_manager.providers().items():
+            try:
+                delegate_status[name] = await delegate.health()
+            except Exception as exc:
+                delegate_status[name] = {"error": str(exc)}
+        return {
+            "database": {
+                "backend": backend_of(str(settings.database_url)),
+                "reachable": ping(engine),
+            },
+            "model": model_status,
+            "delegates": delegate_status,
+        }
+
+    @app.get("/api/v1/rules/{name}", response_class=PlainTextResponse)
+    async def get_rule_file(name: str) -> str:
+        if name not in {"SOUL", "AGENTS"}:
+            raise HTTPException(status_code=404, detail="规则文件不存在")
+        path = settings.soul_file if name == "SOUL" else Path("AGENTS.md")
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+        if name == "SOUL":
+            return load_soul(path)
+        return "# AGENTS.md（尚未创建，保存后生效）\n"
+
+    @app.put("/api/v1/rules/{name}", response_class=PlainTextResponse)
+    async def update_rule_file(name: str, payload: RuleUpdate) -> str:
+        if name not in {"SOUL", "AGENTS"}:
+            raise HTTPException(status_code=404, detail="规则文件不存在")
+        path = settings.soul_file if name == "SOUL" else Path("AGENTS.md")
+        path.write_text(payload.content, encoding="utf-8")
+        return "saved"
 
     # ---- 长期记忆（阶段 4） --------------------------------------------
 

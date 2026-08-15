@@ -62,6 +62,10 @@ class PolicyEngine:
     def risk_of(self, tool_name: str) -> RiskLevel | None:
         return self._rules.get(tool_name)
 
+    def rules(self) -> dict[str, RiskLevel]:
+        """规则快照（只读用途）；返回副本，调用方不能修改引擎。"""
+        return dict(self._rules)
+
     def evaluate(self, tool_name: str) -> PolicyDecision:
         risk = self.risk_of(tool_name)
         if risk is None:

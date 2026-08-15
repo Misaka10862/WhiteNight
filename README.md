@@ -5,7 +5,7 @@
 - 中文名：**白夜**；昵称：**小白**；默认称呼用户：**主人**
 - 首版入口：本地 WebUI（优先）→ QQ 私聊（后续阶段）
 - 主脑：Ollama `qwen3-vl:8b`；复杂 GUI 任务委派 Hermes；编码任务委派 Codex
-- 当前阶段：**阶段 5 · 路由与 Agent 委派已落地**（规则/LLM 路由、Codex MCP Adapter、Hermes Gateway Adapter、任务状态/重试/中止）
+- 当前阶段：**阶段 6 · 完整 WebUI 工作台已落地**（聊天/会话/记忆/任务/审批/权限/模型/约束页面）
 - 过程性文档（已完成/未完成/问题记录）：[docs/PROGRESS.md](docs/PROGRESS.md)
 
 ## 仓库结构

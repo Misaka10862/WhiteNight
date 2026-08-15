@@ -100,6 +100,58 @@ class SessionStore:
             orm.commit()
             return self._record(message)
 
+    def rename_session(self, session_id: str, title: str) -> SessionSummary:
+        with self._orm() as orm:
+            session = orm.get(Session, session_id)
+            if session is None:
+                raise SessionNotFoundError(session_id)
+            session.title = title.strip()[:200] or "新会话"
+            session.updated_at = datetime.now(UTC)
+            orm.commit()
+            count = orm.scalar(
+                select(func.count(Message.id)).where(Message.session_id == session_id)
+            )
+            return self._summary(session, count or 0)
+
+    def delete_session(self, session_id: str) -> None:
+        """删除会话：级联删除消息，立即从应用移除。正文不进入审计。"""
+        with self._orm() as orm:
+            session = orm.get(Session, session_id)
+            if session is None:
+                raise SessionNotFoundError(session_id)
+            orm.delete(session)
+            orm.commit()
+
+    def export_session(self, session_id: str, fmt: str = "markdown") -> str:
+        messages = self.list_messages(session_id)
+        if fmt == "jsonl":
+            import json
+
+            lines = [
+                json.dumps(
+                    {
+                        "id": message.id,
+                        "role": message.role,
+                        "kind": message.kind,
+                        "content": message.content,
+                        "image_data_url": message.image_data_url,
+                        "created_at": message.created_at.isoformat(),
+                    },
+                    ensure_ascii=False,
+                )
+                for message in messages
+            ]
+            return "\n".join(lines) + ("\n" if lines else "")
+        parts = [f"# 会话 {session_id}", ""]
+        for message in messages:
+            parts.append(f"## {message.role} ({message.created_at.isoformat()})")
+            if message.image_data_url:
+                parts.append(f"![image]({message.image_data_url})")
+            if message.content:
+                parts.append(message.content)
+            parts.append("")
+        return "\n".join(parts)
+
     def _summary(self, session: Session, message_count: int) -> SessionSummary:
         return SessionSummary(
             id=session.id,
