@@ -10,11 +10,10 @@
 - **最小验证方案（用户确认）**：LoRA 训练暂缓；临时使用本机 `qwen3:8b`
   文本模型 + SOUL.md 预设人格跑通最小验证；之后再按正式计划训练带视觉能力的模型。
   `scripts/e2e_smoke.py --real-model` 实测通过（流式聊天/记忆/主动状态/备份）。
-- **NapCat 安装进行中（卡在 App 管理权限）**：文件已解压到 QQ 容器；实测即使
-  管理员权限执行 `cp` 到 `/Applications/QQ.app/.../package.json.bak` 仍被 macOS
-  TCC 拒绝（`Operation not permitted`）。必须由用户在
-  「系统设置 → 隐私与安全性 → App 管理」中给 **NapCat 安装器**或**终端/Terminal**
-  授权，然后重跑安装器或执行 `./scripts/patch_qq_napcat.sh`。
+- **NapCat 已启动，等待扫码**：QQ 入口注入已完成（package.json 指向 NapCat 加载器，
+  `.bak` 备份存在）；QQ 已以 `--no-sandbox` 重启，NapCat WebUI 6099 上线。
+  二维码与 WebUI 已打开。下一步：用户扫码 → WebUI「网络配置」新建 HTTP 客户端，
+  上报 `http://127.0.0.1:8765/api/v1/onebot/events` → 配置 owner。
   扫码后的 OneBot 上报与 owner 配置工具已备好：`scripts/configure_qq.py`、
   `scripts/qq_link_check.py` + `docs/NAPCAT.md`；`proactive_sender: qq` 已接通。
   已用 mock OneBot + 真实 qwen3:8b 验证 Adapter 全链路（事件→回复→send_private_msg）。
