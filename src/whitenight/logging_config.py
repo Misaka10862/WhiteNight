@@ -76,6 +76,12 @@ def setup_logging(
     root = logging.getLogger()
     root.handlers.clear()
 
+    # 幂等恢复：之前可能有 fileConfig(disable_existing_loggers=True) 之类的配置
+    # 把业务 logger 标记为 disabled；显式取消禁用，让 INFO 日志重新可达 root。
+    for candidate in logging.Logger.manager.loggerDict.values():
+        if isinstance(candidate, logging.Logger):
+            candidate.disabled = False
+
     stream_handler: logging.Handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(RedactingFilter())

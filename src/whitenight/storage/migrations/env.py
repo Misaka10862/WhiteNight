@@ -17,7 +17,9 @@ from whitenight.storage.engine import build_engine, resolve_database_key
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False：迁移日志配置不应禁掉已初始化的业务 logger，
+    # 否则启动后 QQ 消息等 INFO 日志会全部丢失。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # 应用内自动迁移通过 config.attributes 注入具体 Settings；
 # CLI 运行时回退到全局配置分层（环境变量 > YAML > 默认值）。

@@ -28,11 +28,14 @@ class ParsedOneBotMessage:
     image_data_url: str | None = None
     file_path: str | None = None
     file_name: str | None = None
+    is_poke: bool = False
+    poke_type: str | None = None
+    poke_id: str | None = None
     segments: list[str] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
-        return not (self.text.strip() or self.image_data_url or self.file_path)
+        return not (self.text.strip() or self.image_data_url or self.file_path or self.is_poke)
 
 
 def parse_segments(event: OneBotPrivateMessageEvent) -> ParsedOneBotMessage:
@@ -47,6 +50,10 @@ def parse_segments(event: OneBotPrivateMessageEvent) -> ParsedOneBotMessage:
         elif segment.type in {"record", "file"}:
             parsed.file_path = segment.data.get("url") or segment.data.get("file")
             parsed.file_name = segment.data.get("file")
+        elif segment.type == "poke":
+            parsed.is_poke = True
+            parsed.poke_type = segment.data.get("type")
+            parsed.poke_id = segment.data.get("id")
     if not parsed.text and event.raw_message:
         parsed.text = event.raw_message
     return parsed

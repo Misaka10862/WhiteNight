@@ -121,6 +121,13 @@ def create_app(
         settings.ensure_dirs()
         if settings.auto_migrate:
             upgrade_to_head(settings)
+            # alembic env.py 的 fileConfig 会替换 root handlers（并可能禁用业务
+            # logger），必须在迁移后恢复 WhiteNight 的日志配置。
+            setup_logging(
+                level=settings.log_level,
+                json_logs=settings.log_json,
+                log_file=str(settings.data_dir / "logs" / "whitenight.log"),
+            )
         engine = build_engine(
             str(settings.database_url),
             key=resolve_database_key(
