@@ -96,6 +96,16 @@ _MODEL_KEEP_ALIVE_OPTIONS = ("-1", "5m", "30m", "1h", "6h", "12h")
 
 def _build_memory_extractor(settings: Settings, provider: ModelProvider) -> MemoryExtractor:
     if settings.memory_extractor == "ollama":
+        if isinstance(provider, OllamaProvider):
+            # 记忆提取复用同一模型，但用更小的输出上限：提取只需 JSON，
+            # 2048 token 会把唯一推理槽占住几分钟，拖慢下一条聊天。
+            extractor_provider = OllamaProvider(
+                base_url=provider.base_url,
+                model=provider.model,
+                max_output_tokens=settings.memory_extract_max_tokens,
+                keep_alive=provider.keep_alive,
+            )
+            return OllamaMemoryExtractor(extractor_provider)
         return OllamaMemoryExtractor(provider)
     if settings.memory_extractor == "rules":
         return RuleBasedMemoryExtractor()

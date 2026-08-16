@@ -46,6 +46,8 @@ class ChatService:
         self._delegates = delegate_manager
         self._proactive = proactive_service
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._extract_delay_s = 15.0
+        self._extract_task: asyncio.Task[None] | None = None
 
     @property
     def provider(self) -> ModelProvider:
@@ -59,6 +61,9 @@ class ChatService:
         except SessionNotFoundError:
             yield ChatEvent(type="error", message=f"会话不存在：{session_id}")
             return
+
+        # 聊天优先：新消息到达时取消待执行/执行中的记忆提取，把唯一推理槽让给用户。
+        self._cancel_pending_extraction()
 
         image_path: str | None = None
         image_mime: str | None = None
@@ -207,10 +212,31 @@ class ChatService:
             kind="text",
         )
         if self._memory is not None:
-            task = asyncio.create_task(self._extract_memories(session_id))
+            task = asyncio.create_task(self._extract_later(session_id))
+            self._extract_task = task
             self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            task.add_done_callback(self._on_extract_done)
         return message
+
+    def _cancel_pending_extraction(self) -> None:
+        """取消延迟中或执行中的记忆提取；正在跑的 Provider 流会被一并中断。"""
+        task = self._extract_task
+        if task is not None and not task.done():
+            task.cancel()
+            logger.info("新消息到达，取消后台记忆提取，释放推理槽")
+
+    def _on_extract_done(self, task: asyncio.Task[None]) -> None:
+        self._background_tasks.discard(task)
+        if self._extract_task is task:
+            self._extract_task = None
+
+    async def _extract_later(self, session_id: str) -> None:
+        """回复后延迟提取：给连续聊天留出窗口，期间新消息会取消本任务。"""
+        try:
+            await asyncio.sleep(self._extract_delay_s)
+            await self._extract_memories(session_id)
+        except asyncio.CancelledError:
+            pass  # 正常取消路径：新消息优先使用推理槽
 
     async def _extract_memories(self, session_id: str) -> None:
         """主回复后的异步记忆提取；失败只记日志，不影响会话。"""

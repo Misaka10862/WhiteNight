@@ -36,6 +36,7 @@ soul_file: SOUL.md
 
 # 记忆提取：ollama（主回复后异步）| rules（规则回退）| none
 memory_extractor: ollama
+memory_extract_max_tokens: 512  # 记忆提取输出上限，避免与聊天抢推理槽
 # 语义检索嵌入模型；为空只启用 FTS5 词法检索
 embedding_model: ""
 
