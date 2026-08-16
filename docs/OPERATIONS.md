@@ -39,7 +39,7 @@ uv run alembic downgrade -1
 | Codex 任务立即失败 | `codex --version`、`~/.codex/auth.json` 存在性；不要打印 auth 内容 |
 | Hermes 任务立即失败 | `hermes status` 是否登录 Provider；未登录是预期快速失败 |
 | QQ 无响应 | 先看 QQ 里是否有“模型调用失败”回复；再看 Ollama 日志 `n_decoded` 是否持续增长且无 `done`（失控生成）；后端/NapCat 状态与 owner 白名单 |
-| QQ 回复慢（十几秒才回） | 通常是一次冷启动：`ollama ps` 看不到模型或 `UNTIL` 临近；WhiteNight 默认 `keep_alive=-1` 常驻，确认配置未被改回 5m |
+| QQ 回复慢（十几秒才回） | 通常是一次冷启动：`ollama ps` 看不到模型或 `UNTIL` 临近；WebUI「模型与 Agent」可切换常驻策略（默认 `-1` 常驻） |
 | QQ 隔了很久才回 | 先看 Mac 是否在睡眠（睡眠期间本机服务不运行）；若需 24h 在线可用 `caffeinate` 保活；再看 `ollama ps` 是否有模型冷启动 |
 | Ollama 失控生成（`/api/chat` 长时间不返回，日志 `n_decoded` 持续增长） | 代码已强制 `num_predict`（默认 2048）；应急可 `brew services restart ollama` 或杀 `llama-server` 进程 |
 | 主动消息没发 | 阶段 8 前发送器为 log；确认 `proactive_enabled` 与静默时段 |

@@ -132,6 +132,11 @@ export interface SystemHealth {
   onebot?: { enabled: boolean; owner_ids: number[]; api_url: string }
 }
 
+export interface ModelConfig {
+  ollama_keep_alive: string
+  options: string[]
+}
+
 export interface ProactiveConfig {
   enabled: boolean
   expected_per_day: number
@@ -258,6 +263,13 @@ export const fetchSessionGrants = () =>
 export const revokeGrant = (id: string) =>
   jsonFetch<void>(`/api/v1/policy/grants/${id}`, { method: 'DELETE' })
 export const fetchSystemHealth = () => jsonFetch<SystemHealth>('/api/v1/system/health')
+export const fetchModelConfig = () => jsonFetch<ModelConfig>('/api/v1/model/config')
+export const updateModelKeepAlive = (ollama_keep_alive: string) =>
+  jsonFetch<{ ollama_keep_alive: string; persisted: boolean }>('/api/v1/model/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keep_alive: ollama_keep_alive }),
+  })
 export const fetchProactiveStatus = () => jsonFetch<ProactiveStatus>('/api/v1/proactive/status')
 export const updateProactiveConfig = (config: ProactiveConfig) =>
   jsonFetch<ProactiveStatus>('/api/v1/proactive/config', {

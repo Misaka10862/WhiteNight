@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（Ollama keep_alive 常驻优化，QQ 回复延迟从冷启动 ~17s 降至 4.5s）
+最后更新：2026-08-16（模型常驻改为 WebUI 可选项，API 即时生效并持久化）
 
 ## 当前阶段
 
@@ -21,13 +21,14 @@
   `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
 - **收尾审计（本轮）**：`scripts/diagnostics.py --json` 全绿（DB integrity/alembic 0007、
   Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
-  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 136 passed / 4 skipped 全绿；
+  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 139 passed / 4 skipped 全绿；
   `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
 - **回复延迟优化（本轮）**：Ollama 默认 5m 闲置卸载导致下一条消息冷启动 ~17s；
-  已增加 `ollama_keep_alive`（默认 `-1` 常驻，Ollama 需数字 -1，Provider 自动转换），
+  已增加 `ollama_keep_alive` 配置。**不再是写死的默认值**：WebUI「模型与 Agent」
+  页面可下拉选择 `-1/5m/30m/1h/6h/12h`，`GET/PUT /api/v1/model/config` 即时更新
+  运行中的 Provider 并写入 `config/whitenight.yaml`（写前自动备份），重启保持。
   QQ 闭环实测「事件→回复回传」4.5s；`ollama ps` 显示 `UNTIL: Forever`。
-  代价：qwen3:8b 常驻约 5.6GB；如需释放可 `ollama stop qwen3:8b` 或把
-  `ollama_keep_alive` 改为 `5m`/`1h`。新增契约断言 keep_alive 与 num_predict。
+  代价：qwen3:8b 常驻约 5.6GB；如需释放可在 Dashboard 选 5m 或 `ollama stop qwen3:8b`。
 - **Ollama 失控生成（根因已修复）**：QQ 两次“无回复”都不是内存或 Ollama 假死，
   而是 qwen3:8b 偶发退化循环——请求未设置 `num_predict`，实测单次生成跑到
   `n_decoded > 4000` 仍不结束，占住唯一推理槽。修复：Ollama Provider 增加

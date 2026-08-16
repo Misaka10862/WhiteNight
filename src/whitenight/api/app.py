@@ -6,10 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -26,7 +30,7 @@ from whitenight.channels.types import (
     SessionCreate,
     SessionSummary,
 )
-from whitenight.config import Settings, load_settings
+from whitenight.config import DEFAULT_CONFIG_PATH, Settings, load_settings
 from whitenight.delegates.codex import CodexAdapter
 from whitenight.delegates.hermes import HermesGatewayAdapter
 from whitenight.delegates.manager import DelegateManager, TaskRecord, TaskStore
@@ -81,6 +85,13 @@ class ApprovalAction(BaseModel):
 
 class RuleUpdate(BaseModel):
     content: str
+
+
+class ModelKeepAliveUpdate(BaseModel):
+    keep_alive: str
+
+
+_MODEL_KEEP_ALIVE_OPTIONS = ("-1", "5m", "30m", "1h", "6h", "12h")
 
 
 def _build_memory_extractor(settings: Settings, provider: ModelProvider) -> MemoryExtractor:
@@ -357,6 +368,36 @@ def create_app(
     async def proactive_resume() -> ProactiveStatus:
         service: ProactiveService = app.state.proactive_service
         return service.resume()
+
+    @app.get("/api/v1/model/config")
+    async def model_config() -> dict[str, object]:
+        provider = app.state.chat_service.provider
+        keep_alive = getattr(provider, "keep_alive", settings.ollama_keep_alive)
+        return {"ollama_keep_alive": keep_alive, "options": list(_MODEL_KEEP_ALIVE_OPTIONS)}
+
+    @app.put("/api/v1/model/config")
+    async def update_model_config(payload: ModelKeepAliveUpdate) -> dict[str, object]:
+        if payload.keep_alive not in _MODEL_KEEP_ALIVE_OPTIONS:
+            allowed = ", ".join(_MODEL_KEEP_ALIVE_OPTIONS)
+            raise HTTPException(status_code=400, detail=f"keep_alive 仅支持：{allowed}")
+        provider = app.state.chat_service.provider
+        if isinstance(provider, OllamaProvider):
+            provider.keep_alive = payload.keep_alive
+        settings.ollama_keep_alive = payload.keep_alive
+
+        path = Path(os.environ.get("WHITENIGHT_CONFIG", str(DEFAULT_CONFIG_PATH)))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data: dict[str, object] = {}
+        if path.exists():
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if not isinstance(loaded, dict):
+                raise HTTPException(status_code=500, detail="配置文件格式损坏")
+            data = loaded
+            backup = path.with_suffix(f".bak-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
+            shutil.copy2(path, backup)
+        data["ollama_keep_alive"] = payload.keep_alive
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=True), encoding="utf-8")
+        return {"ollama_keep_alive": payload.keep_alive, "persisted": True}
 
     @app.get("/api/v1/system/health")
     async def system_health() -> dict[str, object]:
