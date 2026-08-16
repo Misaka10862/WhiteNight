@@ -399,6 +399,13 @@ textarea {
   font-size: 13px;
 }
 
+.chat-ok {
+  padding: 8px 14px;
+  color: #1f6b3a;
+  background: #e8f5eb;
+  font-size: 13px;
+}
+
 .preview {
   display: flex;
   align-items: center;
