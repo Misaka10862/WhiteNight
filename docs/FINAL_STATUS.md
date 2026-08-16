@@ -16,7 +16,7 @@
 
 | 能力 | 证据 |
 |---|---|
-| 流式聊天 + 会话恢复 | WebSocket E2E、重启恢复实测（qwen3:8b 与 qwen3-vl:8b 均验证过） |
+| 流式聊天 + 会话恢复 | WebSocket E2E、重启恢复实测；qwen3:8b 常驻（keep_alive=-1），QQ 闭环回复 4.5s |
 | 长期记忆 | FTS5 + 语义混合召回、冲突/编辑/删除、真实 Ollama 提取实测 |
 | 文档/OCR | PDF/DOCX/XLSX/PPTX/文本/代码/zip 语料解析；Apple Vision OCR 实测 |
 | 工具与审批 | 只读自动、低风险会话授权、中高风险逐次审批、删除进废纸篓、批量删除拒绝 |

@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-15（num_predict 上限修复完成并实测；补记 Git 配置备份事件）
+最后更新：2026-08-15（Ollama keep_alive 常驻优化，QQ 回复延迟从冷启动 ~17s 降至 4.5s）
 
 ## 当前阶段
 
@@ -23,12 +23,19 @@
   Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
   输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 136 passed / 4 skipped 全绿；
   `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
+- **回复延迟优化（本轮）**：Ollama 默认 5m 闲置卸载导致下一条消息冷启动 ~17s；
+  已增加 `ollama_keep_alive`（默认 `-1` 常驻，Ollama 需数字 -1，Provider 自动转换），
+  QQ 闭环实测「事件→回复回传」4.5s；`ollama ps` 显示 `UNTIL: Forever`。
+  代价：qwen3:8b 常驻约 5.6GB；如需释放可 `ollama stop qwen3:8b` 或把
+  `ollama_keep_alive` 改为 `5m`/`1h`。新增契约断言 keep_alive 与 num_predict。
 - **Ollama 失控生成（根因已修复）**：QQ 两次“无回复”都不是内存或 Ollama 假死，
   而是 qwen3:8b 偶发退化循环——请求未设置 `num_predict`，实测单次生成跑到
   `n_decoded > 4000` 仍不结束，占住唯一推理槽。修复：Ollama Provider 增加
   `model_max_output_tokens`（默认 2048）→ `/api/chat` `options.num_predict`；
   契约测试锁定 payload；真实 QQ 闭环自检回复「上限修复完成」。详见问题 12。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 137 checks / 0 failures。
+- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 406 checks / 0 failures。
+  检查数远低于挂钟时间 ⇒ 期间系统多次睡眠（`time.sleep` 被暂停），睡眠期间 QQ 无法
+  即时回复；需要 24 小时在线可考虑 `caffeinate` 保活（待用户确认）。
   期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
 - **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
   DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`

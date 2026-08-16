@@ -123,6 +123,7 @@ def create_app(
             base_url=settings.ollama_base_url,
             model=settings.model_name,
             max_output_tokens=settings.model_max_output_tokens,
+            keep_alive=settings.ollama_keep_alive,
         )
         audit = AuditService(engine)
         approvals = ApprovalService(engine)
