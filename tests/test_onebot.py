@@ -134,6 +134,27 @@ def test_file_segment_saves_local_copy(engine: Engine, settings: Settings, tmp_p
     assert qq_files[0].read_bytes() == b"hello qq"
 
 
+def test_poke_segment_is_recognized_and_visible(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = {
+        "post_type": "message",
+        "message_type": "private",
+        "message_id": 7,
+        "user_id": 10001,
+        "raw_message": "",
+        "message": [{"type": "poke", "data": {"type": "戳一戳", "id": "1000"}}],
+    }
+    status = asyncio_run(adapter.handle_event(event))
+    assert status["status"] == "replied"
+    assert sender.messages[-1][1] == "在的，主人"
+
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    session_id = sessions.list_sessions()[0].id
+    contents = [message.content for message in sessions.list_messages(session_id)]
+    assert any("戳了戳我" in content for content in contents)
+
+
 def test_qq_approval_commands(engine: Engine, settings: Settings) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)

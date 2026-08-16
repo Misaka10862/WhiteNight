@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-16（模型常驻改为 WebUI 可选项，API 即时生效并持久化）
+最后更新：2026-08-16（QQ 戳一戳识别 + 业务日志修复：poke 不再显示为空消息）
 
 ## 当前阶段
 
@@ -21,7 +21,7 @@
   `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
 - **收尾审计（本轮）**：`scripts/diagnostics.py --json` 全绿（DB integrity/alembic 0007、
   Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
-  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 139 passed / 4 skipped 全绿；
+  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 140 passed / 4 skipped 全绿；
   `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
 - **回复延迟优化（本轮）**：Ollama 默认 5m 闲置卸载导致下一条消息冷启动 ~17s；
   已增加 `ollama_keep_alive` 配置。**不再是写死的默认值**：WebUI「模型与 Agent」
@@ -29,6 +29,13 @@
   运行中的 Provider 并写入 `config/whitenight.yaml`（写前自动备份），重启保持。
   QQ 闭环实测「事件→回复回传」4.5s；`ollama ps` 显示 `UNTIL: Forever`。
   代价：qwen3:8b 常驻约 5.6GB；如需释放可在 Dashboard 选 5m 或 `ollama stop qwen3:8b`。
+- **QQ 戳一戳识别（本轮）**：NapCat 会把「戳一戳」上报为 `type: "poke"` 消息段、
+  文本为空；旧逻辑把它当空消息交给模型，Dashboard 显示「（空消息）」。
+  现在 `parse_segments` 识别 poke 段并注入显式上下文「（主人刚刚在QQ上戳了戳我，
+  类型：xxx）」，模型能生成被戳的专属反应，会话里也有可见记录。
+  同时修复启动后业务日志丢失：Alembic `fileConfig` 会禁用业务 logger / 替换
+  root handler；`uvicorn log_config=None` + 迁移后重设日志 + `disable_existing_loggers=False`。
+  实测日志出现 `poke=True text=''`，140 passed / 4 skipped。
 - **Ollama 失控生成（根因已修复）**：QQ 两次“无回复”都不是内存或 Ollama 假死，
   而是 qwen3:8b 偶发退化循环——请求未设置 `num_predict`，实测单次生成跑到
   `n_decoded > 4000` 仍不结束，占住唯一推理槽。修复：Ollama Provider 增加

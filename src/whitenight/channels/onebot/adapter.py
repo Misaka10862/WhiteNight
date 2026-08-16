@@ -125,6 +125,13 @@ class OneBotAdapter:
     async def _process_owner_message(self, event: OneBotPrivateMessageEvent) -> dict[str, object]:
         parsed = parse_segments(event)
         session_id = self._channel_sessions.get_or_create("onebot", str(event.user_id))
+        logger.info(
+            "QQ 私聊处理 user_id=%s message_id=%s poke=%s text=%r",
+            event.user_id,
+            event.message_id,
+            parsed.is_poke,
+            parsed.text[:50],
+        )
 
         approval = await self._handle_approval_command(event, parsed.text, session_id)
         if approval is not None:
@@ -148,9 +155,15 @@ class OneBotAdapter:
         if image_data_url and image_data_url.startswith("http"):
             image_data_url = (await self._download_as_data_url(image_data_url)) or None
 
+        # NapCat 会把“戳一戳”上报成 poke 消息段（文本为空）。转为显式上下文，
+        # 让模型知道发生了什么，同时在会话里留下可见记录而不是“（空消息）”。
+        request_text = parsed.text
+        if parsed.is_poke and not request_text.strip():
+            request_text = f"（主人刚刚在QQ上戳了戳我，戳一戳类型：{parsed.poke_type or '未知'}）"
+
         request = ChatRequest(
             session_id=session_id,
-            text=parsed.text,
+            text=request_text,
             image_data_url=image_data_url,
         )
         reply: str | None = None

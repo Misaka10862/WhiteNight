@@ -23,6 +23,9 @@ def main() -> None:
         port=settings.port,
         log_level=settings.log_level.lower(),
         access_log=False,
+        # 禁止 uvicorn 重写日志配置：否则 create_app 里 setup_logging 的
+        # FileHandler 会被关闭，QQ 消息等业务日志不会落盘。
+        log_config=None,
     )
 
 
