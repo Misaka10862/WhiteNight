@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-16（QQ 戳一戳识别 + 业务日志修复：poke 不再显示为空消息）
+最后更新：2026-08-16（巡检审计：修复记忆提取抢占推理槽；新增保活脚本与文档）
 
 ## 当前阶段
 
@@ -21,7 +21,7 @@
   `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
 - **收尾审计（本轮）**：`scripts/diagnostics.py --json` 全绿（DB integrity/alembic 0007、
   Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
-  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 140 passed / 4 skipped 全绿；
+  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 142 passed / 4 skipped 全绿；
   `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
 - **回复延迟优化（本轮）**：Ollama 默认 5m 闲置卸载导致下一条消息冷启动 ~17s；
   已增加 `ollama_keep_alive` 配置。**不再是写死的默认值**：WebUI「模型与 Agent」
@@ -29,6 +29,11 @@
   运行中的 Provider 并写入 `config/whitenight.yaml`（写前自动备份），重启保持。
   QQ 闭环实测「事件→回复回传」4.5s；`ollama ps` 显示 `UNTIL: Forever`。
   代价：qwen3:8b 常驻约 5.6GB；如需释放可在 Dashboard 选 5m 或 `ollama stop qwen3:8b`。
+- **巡检审计（本轮）**：检查 2026-08-15 下午至今的运行记录。72h 巡检 666 checks /
+  0 failures；DB integrity ok；diagnostics 全绿；无进程崩溃，Ollama 的 killed 告警
+  均为修复失控生成时的主动操作。发现并修复：后台记忆提取用满 2048 token（实测单次
+  占推理槽 2 分 3 秒）→ 提取单独限长 512 token + 延迟 15s + 新消息到达立即取消，
+  实测提取降至 1.1s/209 tokens。新增 `scripts/keep_awake.sh` 供接电源时防睡眠保活。
 - **QQ 戳一戳识别（本轮）**：NapCat 会把「戳一戳」上报为 `type: "poke"` 消息段、
   文本为空；旧逻辑把它当空消息交给模型，Dashboard 显示「（空消息）」。
   现在 `parse_segments` 识别 poke 段并注入显式上下文「（主人刚刚在QQ上戳了戳我，
@@ -41,9 +46,10 @@
   `n_decoded > 4000` 仍不结束，占住唯一推理槽。修复：Ollama Provider 增加
   `model_max_output_tokens`（默认 2048）→ `/api/chat` `options.num_predict`；
   契约测试锁定 payload；真实 QQ 闭环自检回复「上限修复完成」。详见问题 12。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 406 checks / 0 failures。
-  检查数远低于挂钟时间 ⇒ 期间系统多次睡眠（`time.sleep` 被暂停），睡眠期间 QQ 无法
-  即时回复；需要 24 小时在线可考虑 `caffeinate` 保活（待用户确认）。
+- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 666 checks / 0 failures。
+  70 个 >5.5 分钟的空档与 `pmset` 睡眠记录吻合（电池供电时每 ~15 分钟 Maintenance
+  Sleep），非应用故障；睡眠期间 QQ 无法即时回复，接电源时可用
+  `scripts/keep_awake.sh start` 保活。
   期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
 - **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
   DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`

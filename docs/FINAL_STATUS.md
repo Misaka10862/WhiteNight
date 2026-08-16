@@ -8,7 +8,7 @@
   阶段 10 核心完成**。
 - 当前运行方案：**临时最小验证**——本机 `qwen3:8b` 文本模型 + `SOUL.md` 预设人格；
   图片消息给出明确“暂不能看图”提示。LoRA 视觉模型为后续正式方案。
-- 测试基线：**140 passed / 4 skipped**；ruff + mypy strict + 前端 eslint/tsc/vite 全绿。
+- 测试基线：**142 passed / 4 skipped**；ruff + mypy strict + 前端 eslint/tsc/vite 全绿。
 - 真实 QQ 链路已打通（NapCat 扫码 + OneBot 上报/发送 + owner 白名单 + 收发闭环实测）。
 - 72 小时持续运行巡检进行中（由 Agent 启动，当前 0 失败）。
 
@@ -17,7 +17,7 @@
 | 能力 | 证据 |
 |---|---|
 | 流式聊天 + 会话恢复 | WebSocket E2E、重启恢复实测；qwen3:8b 常驻（keep_alive=-1），QQ 闭环回复 4.5s |
-| 长期记忆 | FTS5 + 语义混合召回、冲突/编辑/删除、真实 Ollama 提取实测 |
+| 长期记忆 | FTS5 + 语义混合召回、冲突/编辑/删除、真实 Ollama 提取实测；提取限长 512 token，聊天优先取消占用 |
 | 文档/OCR | PDF/DOCX/XLSX/PPTX/文本/代码/zip 语料解析；Apple Vision OCR 实测 |
 | 工具与审批 | 只读自动、低风险会话授权、中高风险逐次审批、删除进废纸篓、批量删除拒绝 |
 | 路由与委派 | 黄金路由集达标；Codex MCP 真实握手；Hermes 未登录安全失败 |

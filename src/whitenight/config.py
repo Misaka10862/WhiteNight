@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     soul_file: Path = Field(default=Path("SOUL.md"))
     auto_migrate: bool = True
     memory_extractor: Literal["ollama", "rules", "none"] = "ollama"
+    memory_extract_max_tokens: int = 512  # 记忆提取单独限长，避免占住唯一推理槽太久
     embedding_model: str = ""  # 为空则仅词法检索；小模型按需加载
     hermes_gateway_url: str = "http://127.0.0.1:9119"
     codex_command: str = "codex"
