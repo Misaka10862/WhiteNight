@@ -32,6 +32,7 @@ def test_stream_chat_payload_caps_output_tokens() -> None:
         base_url="http://contract.test",
         model="qwen3:8b",
         max_output_tokens=123,
+        keep_alive="-1",
         transport=httpx.MockTransport(handler),
     )
 
@@ -49,5 +50,6 @@ def test_stream_chat_payload_caps_output_tokens() -> None:
     assert asyncio.run(run()) == "好的"
     assert captured["model"] == "qwen3:8b"
     assert captured["stream"] is True
+    assert captured["keep_alive"] == -1
     assert captured["think"] is False
     assert captured["options"] == {"num_predict": 123}

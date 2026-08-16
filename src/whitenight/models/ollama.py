@@ -25,11 +25,13 @@ class OllamaProvider:
         model: str,
         timeout_s: float = 600.0,
         max_output_tokens: int = 2048,
+        keep_alive: str = "-1",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.max_output_tokens = max_output_tokens
+        self.keep_alive = keep_alive
         self.timeout = httpx.Timeout(timeout_s, connect=10.0)
         self._transport = transport
 
@@ -40,6 +42,13 @@ class OllamaProvider:
             trust_env=False,
             transport=self._transport,
         )
+
+    def _keep_alive_value(self) -> str | int:
+        """Ollama 的 keep_alive 接受时长字符串（如 "5m"）或数字秒；-1 必须是数字。"""
+        try:
+            return int(self.keep_alive)
+        except ValueError:
+            return self.keep_alive
 
     async def stream_chat(self, messages: list[ProviderMessage]) -> AsyncIterator[ModelChunk]:
         payload = {
@@ -53,6 +62,9 @@ class OllamaProvider:
                 for message in messages
             ],
             "stream": True,
+            # 常驻模型：默认 keep_alive=5m 会让闲置后的首条消息等模型重新加载（实测 ~17s），
+            # -1 保持常驻以消除冷启动延迟。
+            "keep_alive": self._keep_alive_value(),
             # 文本模型可关闭思考；qwen3-vl 忽略该开关，thinking 单独流式返回。
             "think": False,
             # 上限必须存在：无 num_predict 时，退化的采样循环会一直生成下去，
