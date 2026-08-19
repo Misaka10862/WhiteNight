@@ -1,106 +1,106 @@
-# 阶段 1 高风险能力实测报告（2026-08-15）
+# Phase 1 High-Risk Capability Actual Measurement Report (2026-08-15)
 
-> 状态：进行中。每项能力给出「可用 / 部分可用 / 待用户操作 / 替代方案」结论。
-> 复跑命令：`uv run scripts/verify_phase1.py --smoke-model --smoke-gateway`
-> 原始 JSON 证据：`data/reports/phase1-*.json`（本机数据目录，不入 Git）。
+> Status: In progress. Each capability gives a conclusion of "available/partially available/to be operated by the user/alternative solutions".
+>Rerun command: `uv run scripts/verify_phase1.py --smoke-model --smoke-gateway`
+> Raw JSON evidence: `data/reports/phase1-*.json` (native data directory, not included in Git).
 
-## 0. 本机环境
+## 0. Native environment
 
-- macOS 26（arm64），16 GiB 统一内存，可用磁盘约 348 GiB
-- Ollama 0.32.1（本机常驻服务）
-- Python 3.12.14（uv 管理）；Node v26.4.0；Hermes v0.17.0；Codex CLI 0.147.0
+- macOS 26 (arm64), 16 GiB unified memory, ~348 GiB free disk
+- Ollama 0.32.1 (native resident service)
+- Python 3.12.14 (uv management); Node v26.4.0; Hermes v0.17.0; Codex CLI 0.147.0
 
-## 1. 本地模型：Ollama qwen3-vl:8b —— 可用
+## 1. Local model: Ollama qwen3-vl:8b - available
 
-| 项目 | qwen3:8b（文本） | qwen3-vl:8b（视觉） |
+| projects | qwen3:8b (text) | qwen3-vl:8b (visual) |
 |---|---|---|
-| 量化 / 大小 | Q4_K_M / 5.2 GB | Q4_K_M / 6.1 GB |
-| 上下文长度 | 40 960 | 262 144 |
-| 能力 | completion, tools, thinking | completion, vision, tools, thinking |
+| Quantization / Size | Q4_K_M / 5.2 GB | Q4_K_M / 6.1 GB |
+| Context length | 40 960 | 262 144 |
+| Ability | completion, tools, thinking | completion, vision, tools, thinking |
 
-烟测结果（16 GiB 机器、模型冷加载、`think` 关闭文本模型）：
+Smoke test results (16 GiB machine, model cold loading, `think` off text model):
 
-| 烟测 | 首 token | 首可见内容 | 总时长 | 输出 |
+| Smoke test | First token | First visible content | Total duration | Output |
 |---|---|---|---|---|
-| 文本「只回复两个字：好的」 | 2.19 s | 2.19 s | 2.23 s | 「好的」 |
-| 视觉「描述这张图片的内容，一句话」（32×32 红色 PNG） | 8.17 s | 11.54 s | 12.27 s | 「这张图片完全由均匀的红色填充，无任何其他视觉元素或细节。」 |
-| 工具调用「查杭州天气」（`get_weather` JSON Schema） | — | — | 3.45 s | `tool_calls[0].arguments == {"city":"杭州"}`，Schema 通过 |
+| Text "Just two words to reply: OK" | 2.19 s | 2.19 s | 2.23 s | "OK" |
+| Visual "Describe the content of this image, in one sentence" (32×32 red PNG) | 8.17 s | 11.54 s | 12.27 s | "This image is filled entirely with a uniform red color, without any other visual elements or details." |
+| Tool call "Check Hangzhou Weather" (`get_weather` JSON Schema) | — | — | 3.45 s | `tool_calls[0].arguments == {"city":"Hangzhou"}`, Schema passed |
 
-结论：文字聊天 5–8 秒、图片理解 15 秒内开始输出的性能目标**在当前硬件上成立**。
+Conclusion: The performance targets of 5–8 seconds for text chat and 15 seconds for image understanding are established on current hardware.
 
-### 必须固化的实测结论（供 Provider 实现使用）
+### Measured conclusions that must be solidified (for use by Provider implementation)
 
-1. **图片必须挂在 user message 的 `images` 字段**。Ollama 0.32 的 qwen3-vl
-   会静默忽略顶层 `images` 字段，模型会说“没有看到图片”。
-2. **qwen3-vl 当前模板忽略 `think:false`**：总是先输出 `<think>` 推理 token，
-   可见内容在其后到达（实测多出约 3.4 s）。上下文预算和“首内容延迟”计算
-   必须把 thinking token 计入；若后续 Ollama 版本支持关闭，重新跑烟测对比。
-3. qwen3 文本模型支持顶层 `think:false`，应默认关闭以获得陪伴式即时回复；
-   仅路由/结构化任务按需开启 thinking。
-4. 16 GiB 下只常驻一个 8B 模型：Ollama 自动卸载未用模型；调度与嵌入按需加载。
-   并发参数建议先按 `OLLAMA_NUM_PARALLEL=1` 保守配置，阶段 2 用负载测试锁定。
-5. 工具调用可用：`/api/chat` + `tools` 返回结构化 `tool_calls`，参数符合 JSON Schema
-   （实测 `get_weather(city="杭州")`）；阶段 2 的工具执行层必须仍由程序校验参数，
-   不能直接执行模型输出。
+1. **The picture must be hung in the `images` field of the user message**. qwen3-vl for Ollama 0.32
+   The top-level `images` field will be silently ignored and the model will say "no images seen".
+2. **qwen3-vl current template ignores `think:false`**: always outputs `<think>` reasoning token first,
+   Visible content arrives later (approximately 3.4 s longer as measured). Context budget and "first content delay" calculation
+   Thinking tokens must be included; if support is turned off in subsequent Ollama versions, rerun the smoke test comparison.
+3. The qwen3 text model supports top-level `think:false`, which should be turned off by default to obtain companion instant replies;
+   Only routing/structured tasks enable thinking on demand.
+4. Only one 8B model resides under 16 GiB: Ollama automatically unloads unused models; scheduling and embedding are loaded on demand.
+   It is recommended to configure the concurrency parameters conservatively with `OLLAMA_NUM_PARALLEL=1` first, and then lock them with load testing in phase 2.
+5. Tool calls are available: `/api/chat` + `tools` returns structured `tool_calls`, and the parameters conform to JSON Schema
+   (Actual test `get_weather(city="Hangzhou")`); The tool execution layer in stage 2 must still verify parameters by the program.
+   Model output cannot be performed directly.
 
-## 2. Hermes —— 部分可用（需用户登录模型 Provider）
+## 2. Hermes - partially available (requires user login model Provider)
 
-- Hermes Agent v0.17.0（upstream 2f5950a8）已安装于 `~/.local/bin/hermes`。
-- **Gateway 烟测通过**：`hermes serve --host 127.0.0.1 --port <port>` 可自动构建
-  WebUI 并在限时内返回 HTTP 200；OpenAPI 暴露 sessions、files、tools、
-  computer-use、auth 等完整 REST 面。
-  - 注意：`--skip-build` 在首次没有 web dist 时会直接退出，先建后可用。
-- **任务级验证被凭据阻塞**：`hermes status` 显示所有模型 Provider 均未登录；
-  `/api/sessions` 返回 401。需要用户执行 `hermes model` / `hermes auth`
-  登录一个可用 Provider 后才能验证创建会话、流式事件、审批与中止。
-- **computer-use（cua-driver）**：已安装 `cua-driver 0.19.3`（经本地代理下载成功），
-  位于 `~/.local/bin/cua-driver` 与 `/Applications/CuaDriver.app`（bundle id
-  `com.trycua.driver`）。`hermes computer-use doctor` 结果：
-  二进制/平台/MCP 会话/bundle 身份均通过；**辅助功能与屏幕录制 TCC 未授权**，
-  UI 检查与事件注入不可用。需要用户在系统设置授权，或运行
-  `hermes computer-use permissions grant` 并在弹出的系统对话框确认。
-  授权前 computer-use 不能执行真实 GUI 操作，但这不阻塞 Gateway 协议开发。
-- 替代方案：若 computer-use 在权限或稳定性上不达标，GUI 操作 Provider 可替换
-  （构建计划第 19 节风险表已预留）；Hermes Adapter 只依赖 Gateway 协议。
+- Hermes Agent v0.17.0 (upstream 2f5950a8) is installed in `~/.local/bin/hermes`.
+- **Gateway smoke test passed**: `hermes serve --host 127.0.0.1 --port <port>` can be automatically built
+  WebUI and returns HTTP 200 within a limited time; OpenAPI exposes sessions, files, tools,
+  Computer-use, auth and other complete REST aspects.
+  - Note: `--skip-build` will exit directly when there is no web dist for the first time. It will be built first and then available.
+- **Task-level verification blocked by credentials**: `hermes status` shows that all model providers are not logged in;
+  `/api/sessions` returns 401. Requires user to execute `hermes model` / `hermes auth`
+  Login to an available Provider to verify session creation, streaming events, approvals, and aborts.
+- **computer-use (cua-driver)**: `cua-driver 0.19.3` is installed (successfully downloaded via local agent),
+  Located in `~/.local/bin/cua-driver` and `/Applications/CuaDriver.app` (bundle id
+  `com.trycua.driver`). `hermes computer-use doctor` results:
+  Binaries/platforms/MCP sessions/bundle identities all pass; **Accessibility and screen recording TCC not authorized**,
+  UI inspections and event injection are not available. The user needs to set authorization in the system, or run
+  `hermes computer-use permissions grant` and confirm in the pop-up system dialog box.
+  computer-use cannot perform real GUI operations before authorization, but this does not block Gateway protocol development.
+- Alternative: If computer-use does not meet the standards in terms of permissions or stability, the GUI operation Provider can be replaced
+(Build Plan Section 19 Risk Table Reserved); Hermes Adapter relies only on the Gateway protocol.
 
-## 3. Codex —— 可用（协议握手已验证）
+## 3. Codex - available (protocol handshake verified)
 
-- `codex-cli 0.147.0` 已全局安装；`~/.codex/auth.json` 存在（内容未读取）。
-- **MCP stdio 握手通过**：向 `codex mcp-server` 发送 JSON-RPC
-  `initialize`（protocolVersion `2025-03-26`），返回
+- `codex-cli 0.147.0` is installed globally; `~/.codex/auth.json` exists (contents not read).
+- **MCP stdio handshake passed**: send JSON-RPC to `codex mcp-server`
+  `initialize`(protocolVersion `2025-03-26`), return
   `serverInfo: codex-mcp-server 0.147.0`。
-- 新建/续接线程、工作目录、沙箱与错误恢复将在阶段 5 用契约测试验证；
-  阶段 1 已确认官方 MCP 入口可用，无需自行实现协议。
+- New/continued threads, working directories, sandboxes and error recovery will be verified with contract testing in stage 5;
+  Phase 1 has confirmed that the official MCP entrance is available and there is no need to implement the protocol yourself.
 
-## 4. NapCat / QQ —— 待用户操作
+## 4. NapCat / QQ - waiting for user operation
 
-- NapCat 未安装；npm 包 `napcat` 已被官方撤下（404），需从 NapCatQQ 官方
-  发布渠道下载构建并由用户扫码登录专用 QQ 小号。
-- 阻塞点属于账号风控与扫码交互，Agent 无法代做；OneBot 11 Adapter 可以先用
-  mock OneBot server 开发，不受阻塞。
+- NapCat is not installed; npm package `napcat` has been officially removed (404), you need to download it from NapCatQQ official website
+  The release channel downloads and builds a dedicated QQ account for users to scan the QR code to log in to.
+- The blocking point is the interaction between account risk control and QR code scanning, which cannot be done by Agent; OneBot 11 Adapter can be used first
+  Mock OneBot server development without blocking.
 
-## 5. SQLCipher + Keychain —— 可用
+## 5. SQLCipher + Keychain - available
 
-- 初版 `sqlcipher3-binary` 仅发布 Linux wheel，在 macOS 安装失败（已记录
-  ADR-0002 修订）；切换为 `sqlcipher3==0.6.2`（提供 macOS arm64 cp312 wheel），
-  `uv sync --extra sqlcipher` 成功。
-- 实测：正确密钥可建表写入/读取；错误密钥被拒绝；驱动版本 SQLCipher 3.51.1。
-- **引擎层集成测试通过**（`tests/test_sqlcipher_integration.py`，23 tests 全绿）：
-  `storage.engine.build_engine("sqlcipher:///...", key=...)` 经由 PRAGMA key
-  工作；`PRAGMA key` 不接受绑定参数，已改为转义字面量注入且不入日志。
-- macOS Keychain 一次性条目写入/读取/删除探针通过（`security` CLI 后端）。
+- The first version of `sqlcipher3-binary` was only released for Linux wheel, and the installation failed on macOS (recorded
+  ADR-0002 revision); switch to `sqlcipher3==0.6.2` (provides macOS arm64 cp312 wheel),
+  `uv sync --extra sqlcipher` succeeded.
+- Actual measurement: Correct keys can be used to write/read tables; incorrect keys are rejected; driver version SQLCipher 3.51.1.
+- **Engine layer integration test passed** (`tests/test_sqlcipher_integration.py`, 23 tests all green):
+  `storage.engine.build_engine("sqlcipher:///...", key=...)` via PRAGMA key
+  Working; `PRAGMA key` does not accept bind parameters, has been changed to escaped literal injection and is not logged.
+- macOS Keychain one-time entry write/read/delete probe pass (`security` CLI backend).
 
-## 6. 阶段 1 结论与待办
+## 6. Phase 1 Conclusion and To-Do
 
-| 能力 | 结论 |
+| Ability | Conclusion |
 |---|---|
-| qwen3-vl:8b 推理 | 可用，性能达标，接口结论已固化 |
-| Hermes Gateway | 协议面可用；任务链路待用户登录 Provider |
-| Hermes computer-use | 驱动 0.19.3 已安装；TCC 授权待用户确认（doctor 已给出精确诊断） |
-| Codex MCP | 可用，握手通过 |
-| NapCat / QQ | 待用户下载与扫码；开发可用 mock 先行 |
-| SQLCipher / Keychain | 可用，原型与集成测试通过 |
+| qwen3-vl:8b reasoning | Available, performance meets standards, interface conclusion has been solidified |
+| Hermes Gateway | The protocol plane is available; the task link is waiting for the user to log in Provider |
+| Hermes computer-use | Driver 0.19.3 installed; TCC authorization awaits user confirmation (doctor has given accurate diagnosis) |
+| Codex MCP | Available, handshake passed |
+| NapCat / QQ | Waiting for users to download and scan the code; develop available mocks first |
+| SQLCipher / Keychain | Available, prototype and integration tests passed |
 
-退出条件中“每项高风险能力都有可用方案或明确替代方案”已基本满足；
-仅 Hermes 任务链路与 QQ 链路需要用户完成登录/扫码后再跑一次契约烟测，
-期间不阻塞阶段 2（最小纵向链路）的开发。
+The exit conditions of "each high-risk capability has available solutions or clear alternatives" have been basically met;
+Only the Hermes task link and QQ link require the user to complete the login/scan the QR code and then run a contract smoke test.
+Development of Phase 2 (minimum vertical link) is not blocked during this period.

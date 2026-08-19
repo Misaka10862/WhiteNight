@@ -1,28 +1,28 @@
-# ADR-0003：阶段 2 流式聊天使用 WebSocket，单请求单连接
+# ADR-0003: Phase 2 streaming chat uses WebSocket, single request, single connection
 
-- 状态：已接受
-- 日期：2026-08-15
+- Status: Accepted
+- Date: 2026-08-15
 
-## 背景
+## Background
 
-构建计划第 5 节架构图为 `WebUI -> WhiteNight API / WebSocket`；阶段 2 需要打通
-WebUI → API → Ollama 的流式回复，并支持图片与会话恢复。
+The architecture diagram in Section 5 of the build plan is `WebUI -> WhiteNight API / WebSocket`; Phase 2 needs to be opened up
+WebUI → API → Ollama's streaming reply, and supports image and session recovery.
 
-## 决策
+## decision making
 
-1. 聊天采用一条 WebSocket（`/api/v1/chat/ws`），一个请求在同一连接内流式返回
-   `start / chunk / done / error` 事件，客户端在 `done` 后关闭连接。
-2. 不用 SSE：SSE 只能单向、无法承载后续统一的审批请求/中止控制通道；
-   同一 WebSocket 事件模型可平滑升级到标准化事件信封。
-3. 用户消息先持久化，完整 assistant 回复后落库；连接中断不重放请求，
-   因此重启/断线不会产生重复回复。
-4. 图片先落盘 `data/attachments/`，消息只存相对路径与 MIME；读回时生成
-   data URL，文件缺失返回 `null` 而不是伪造内容。
-5. 传输事件只包含模型可见内容 delta；thinking token 不出 WebUI。
+1. The chat uses a WebSocket (`/api/v1/chat/ws`), and a request is streamed back within the same connection.
+   `start / chunk / done / error` event, the client closes the connection after `done`.
+2. No need for SSE: SSE can only be used in one direction and cannot carry the subsequent unified approval request/abortion control channel;
+   The same WebSocket event model can be smoothly upgraded to standardized event envelopes.
+3. User messages are persisted first, and then the complete assistant reply is dropped into the database; the request is not replayed when the connection is interrupted.
+   Therefore, restarting/disconnecting will not generate duplicate replies.
+4. The image is first downloaded to `data/attachments/`, and the message only stores the relative path and MIME; it is generated when reading back
+   data URL, missing file returns `null` instead of fake content.
+5. The transmission event only contains the visible content delta of the model; the thinking token does not exit the WebUI.
 
-## 后果
+## Consequences
 
-- 优点：单一传输层覆盖阶段 2-8 的进度、审批与中止需求。
-- 代价：客户端需要管理 WebSocket 生命周期；断线重连逻辑集中在 Web 渠道层。
-- 回退：如后续需要服务器主动推送历史/心跳，在现有 WS 上扩展事件类型，
-  不改 REST 会话接口。
+- Advantages: A single transport layer covers the progress, approval and abort requirements of stages 2-8.
+- Cost: The client needs to manage the WebSocket life cycle; the disconnection and reconnection logic is concentrated in the Web channel layer.
+- Fallback: If the server needs to actively push history/heartbeat in the future, expand the event type on the existing WS,
+  No changes to the REST session interface.

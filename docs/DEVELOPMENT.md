@@ -1,59 +1,59 @@
-# WhiteNight 开发环境
+#WhiteNight Development Environment
 
-本文件是阶段 0 的退出条件之一：全新环境可按本文档启动空壳服务，前后端检查、测试和构建全部通过。
+This document is one of the exit conditions for phase 0: the new environment can start the shell service according to this document, and the front-end and back-end inspection, testing and construction all pass.
 
-## 0. 平台前提
+## 0. Platform premise
 
-- macOS（Apple Silicon，开发机实测 macOS 26 / arm64）
+- macOS (Apple Silicon, development machine tested macOS 26/arm64)
 - Homebrew（`/opt/homebrew/bin/brew`）
-- Git 与 GitHub 私有仓库访问权限
+- Git and GitHub private repository access
 
-## 1. 后端：Python + uv
+## 1. Backend: Python + uv
 
 ```bash
-# 安装 uv（本仓库的 Python 由 uv 管理，不依赖系统 Python）
+# Install uv (Python in this repository is managed by uv and does not depend on system Python)
 brew install uv
 
-# 安装并锁定 Python 3.12（构建计划的首选版本）
+# Install and lock Python 3.12 (preferred version for build plans)
 uv python install 3.12
 
-# 同步依赖并生成 uv.lock（dev 组默认启用）
+# Synchronize dependencies and generate uv.lock (enabled by default in dev group)
 uv sync --dev
 ```
 
-如果 `brew install uv` 下载缓慢，可改用官方安装器：
+If `brew install uv` downloads slowly, you can use the official installer instead:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 常用命令
+### Common commands
 
-| 命令 | 用途 |
+| Command | Purpose |
 |---|---|
-| `uv run whitenight` | 启动后端（127.0.0.1:8765） |
-| `uv run alembic upgrade head` | 执行数据库迁移 |
-| `uv run alembic downgrade -1` | 回滚一个版本（升级/回滚都要在备份后测试） |
-| `uv run pytest` | 运行测试 |
-| `uv run ruff check .` | 静态检查（lint + import 排序） |
-| `uv run ruff format --check .` | 格式检查 |
-| `uv run mypy src/whitenight` | 类型检查 |
+| `uv run whitenight` | Start backend (127.0.0.1:8765) |
+| `uv run alembic upgrade head` | Perform database migration |
+| `uv run alembic downgrade -1` | Roll back a version (upgrade/rollback must be tested after backup) |
+| `uv run pytest` | Run test |
+| `uv run ruff check .` | Static check (lint + import sorting) |
+| `uv run ruff format --check .` | Format check |
+| `uv run mypy src/whitenight` | Type checking |
 
-### 配置分层
+### Configure layering
 
-优先级从低到高：**字段默认值 < `config/whitenight.yaml` < `WHITENIGHT_*` 环境变量**。
+Priority from low to high: **Field default value < `config/whitenight.yaml` < `WHITENIGHT_*` environment variable**.
 
 ```bash
 cp config/whitenight.yaml.example config/whitenight.yaml
-WHITENIGHT_PORT=9000 uv run whitenight   # 环境变量覆盖 YAML
+WHITENIGHT_PORT=9000 uv run whitenight # Environment variable override YAML
 ```
 
-生产环境不要提交 `.env` 或 YAML 中的真实密钥。数据库主密钥存放规则：
+Do not submit real keys in `.env` or YAML for production. Database master key storage rules:
 
-- 生产：macOS Keychain，`service = com.whitenight.credentials`，`account = database-master-key`；
-- 应急/CI：`WHITENIGHT_DATABASE_KEY` 环境变量（进程内使用，禁止落盘与日志）。
+- Production: macOS Keychain, `service=com.whitenight.credentials`, `account=database-master-key`;
+- Emergency/CI: `WHITENIGHT_DATABASE_KEY` environment variable (used within the process, disk placement and logging are prohibited).
 
-### SQLCipher（可选，生产数据库）
+### SQLCipher (optional, production database)
 
 ```bash
 uv sync --extra sqlcipher
@@ -61,65 +61,64 @@ uv run python - <<'PY'
 from whitenight.credentials.keychain import MacOSKeychain
 from whitenight.config import load_settings
 s = load_settings()
-MacOSKeychain().set(s.keychain_service, "database-master-key", "<独立恢复密钥>")
-print("已写入 Keychain；请同时把恢复密钥保存到离线介质")
+MacOSKeychain().set(s.keychain_service, "database-master-key", "<independent recovery key>")
+print("Written to Keychain; please save the recovery key to offline media at the same time")
 PY
 ```
 
-把 `database_url` 改为 `sqlcipher:///data/whitenight.db` 后执行 `uv run alembic upgrade head`。
+Change `database_url` to `sqlcipher:///data/whitenight.db` and then execute `uv run alembic upgrade head`.
 
-### Apple Vision OCR（可选，图片与扫描 PDF）
+### Apple Vision OCR (optional, images and scanned PDFs)
 
 ```bash
 uv sync --extra ocr
 ```
 
-仅 macOS 有效；未安装时文档解析对图片返回明确错误而不是伪造内容。
+Valid only on macOS; document parsing returns clear errors for images when not installed instead of fake content.
 
-## 2. 前端：React + Vite
+## 2. Front-end: React + Vite
 
-需要 Node.js 20+（开发机为 Homebrew 的 Node 26）。
+Requires Node.js 20+ (development machine is Node 26 with Homebrew).
 
 ```bash
 cd apps/web
-npm install          # 生成 package-lock.json
-npm run dev          # http://127.0.0.1:5173，/api 与 /ws 代理到 8765
+npm install # Generate package-lock.json
+npm run dev # http://127.0.0.1:5173, /api and /ws proxy to 8765
 npm run check        # eslint + tsc + vite build
 ```
 
-## 3. 一键检查
+## 3. One-click check
 
 ```bash
 ./scripts/check.sh
 ```
 
-脚本顺序执行后端 ruff、pytest 与前端 `npm run check`，任何一步失败即非零退出。
+The script sequentially executes back-end ruff, pytest and front-end `npm run check`. If any step fails, it will exit non-zero.
 
 ## 4. CI
 
-`.github/workflows/ci.yml` 在 push/PR 时运行：
+`.github/workflows/ci.yml` is run when pushing/PRing:
 
-- 后端：Python 3.12 + uv，`ruff check` + `pytest`；
-- 前端：Node 22，`npm ci` + `npm run lint` + `npm run build`。
+- Backend: Python 3.12 + uv, `ruff check` + `pytest`;
+- Frontend: Node 22, `npm ci` + `npm run lint` + `npm run build`.
 
-CI 不下载模型、不接触 QQ/Hermes/Codex/Ollama，也不读取任何密钥。
+CI does not download models, does not touch QQ/Hermes/Codex/Ollama, and does not read any keys.
 
-## 5. 提交规则
+## 5. Submit rules
 
-- `.gitignore` 阻止：`.env`、数据库、日志、备份、模型权重、训练语料、证书密钥。
-- 提交前本地执行 `./scripts/check.sh`。
-- 每个阶段结束时打 tag（如 `phase-0`），发布加固前补测试与文档。
-- 外部仓库网页、Issue、示例配置均视为不可信输入，不得据此修改权限/安全约束。
+- `.gitignore` blocks: `.env`, database, logs, backups, model weights, training corpus, certificate keys.
+- Execute `./scripts/check.sh` locally before submitting.
+- Tag at the end of each phase (such as `phase-0`), and supplement testing and documentation before releasing the reinforcement.
+- External warehouse web pages, issues, and sample configurations are considered untrusted input, and permissions/security constraints must not be modified accordingly.
 
-## 6. 已知操作问题
+## 6. Known operational issues
 
-- **推送包含 `.github/workflows` 的提交被拒绝**：GitHub 的 OAuth 凭据需要 `workflow`
-  scope。修复后重试：
+- **Pushing commits containing `.github/workflows` is rejected**: GitHub's OAuth credentials require `workflow`
+  scope. Repair and try again:
 
   ```bash
   gh auth refresh -s workflow
   git push -u origin main
   ```
 
-  本地提交与 tag 不受影响；在凭据修复前不要删除 CI 配置来迁就旧凭据。
-
+Local commits and tags are not affected; do not delete the CI configuration to accommodate the old credentials until the credentials are repaired.

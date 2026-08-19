@@ -64,3 +64,6 @@ references_projects/
 # 本机私有配置（含 owner QQ 号等，不入库）
 config/whitenight.yaml
 config/whitenight.bak-*
+WhiteNight_设计文档.md
+WhiteNight_技术文档.md
+构建计划.md

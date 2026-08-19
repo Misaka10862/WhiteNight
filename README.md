@@ -1,6 +1,6 @@
 # WhiteNight
 
-[中文说明](README-zh.md)
+[Chinese description](README-zh.md)
 
 WhiteNight is a local-first personal AI agent for macOS. It provides a unified interface for conversation, memory, tool execution, and channel integrations, with an emphasis on auditable authorization, credential isolation, and replaceable Provider interfaces.
 

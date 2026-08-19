@@ -1,38 +1,38 @@
-# 阶段 7 后台服务与主动行为 实测报告（2026-08-15）
+# Phase 7 Background Service and Active Behavior Measurement Report (2026-08-15)
 
-> 复跑：`uv run pytest`（110 passed, 4 skipped）；`./scripts/check.sh` 通过。
+>Rerun: `uv run pytest` (110 passed, 4 skipped); `./scripts/check.sh` passed.
 
-## 1. 泊松调度
+## 1. Poisson scheduling
 
-- 指数间隔：`-ln(1-u)/rate`，rate = 每日期望次数 / 活跃分钟数。
-- 静默时段：候选落在静默区间自动跳到静默结束后继续抽样（200 次随机验证全部避开 23:00–08:00）。
-- 最近活动抑制：候选不早于 `last_activity + suppress_minutes`。
-- 过期不补发：现在晚于候选超过宽限期（默认 45 分钟，模拟睡眠/断网）→ 重新调度，不集中补发。
-- 暂停：`paused` + `paused_until` 持久化；到点自动恢复。
+- Exponential interval: `-ln(1-u)/rate`, rate = daily expected times / active minutes.
+- Silent period: Candidates falling in the silent interval will automatically jump to continue sampling after the silence ends (all 200 random verifications avoid 23:00–08:00).
+- Last activity suppression: Candidates no older than `last_activity + suppress_minutes`.
+- No reissue after expiration: Now it is later than the candidate and exceeds the grace period (default 45 minutes, simulates sleep/disconnection) → rescheduling, no centralized reissue.
+- Pause: `paused` + `paused_until` persistence; automatic recovery at the point.
 
-## 2. 主动消息服务
+## 2. Active message service
 
-- `ProactiveService.tick`：关闭/暂停/未到期/到期/过期五种路径确定性输出。
-- 消息组合：SOUL.md + 长期记忆召回（偏好/称呼/纪念）→ 本地模型生成 2-3 句正文。
-- 发送器协议：阶段 7 默认 `LogSender`（`data/logs/proactive.jsonl`），阶段 8 换 QQ OneBot。
-- 失败有限重试（2 次，指数退避），失败后重新调度不补发。
-- 后台循环随 API lifespan 启动，30s tick；WebUI 关闭不影响服务。
+- `ProactiveService.tick`: five path deterministic outputs of shutdown/pause/unexpired/expired/expired.
+- Message combination: SOUL.md + long-term memory recall (preference/salutation/memorial) → local model generates 2-3 sentences of text.
+- Sender protocol: Phase 7 defaults to `LogSender` (`data/logs/proactive.jsonl`), and phase 8 changes to QQ OneBot.
+- Limited retry on failure (2 times, exponential backoff), rescheduling after failure without reissue.
+- The background loop starts with the API lifespan, 30s tick; closing the WebUI does not affect the service.
 
-## 3. 活动接入与 API
+## 3. Activity access and API
 
-- ChatService 在每条用户消息落库后记录 `last_activity_at`。
-- `/api/v1/proactive/status|config|pause|resume`；WebUI 主动消息页为真实配置页。
+- ChatService logs `last_activity_at` after each user message is dropped.
+- `/api/v1/proactive/status|config|pause|resume`; the WebUI active message page is the real configuration page.
 
-## 4. launchd 与菜单栏
+## 4. launchd and menu bar
 
-- `deploy/com.whitenight.service.plist.template`：RunAtLoad + KeepAlive + 日志路径 + PATH。
-- `scripts/install_launchd.sh`：默认 dry-run，`--install/--uninstall` 才修改系统。
-- `scripts/check_service.sh`：健康检查（实测 healthy）。
-- 菜单栏入口：`scripts/menu_bar/MenuBarStatus.swift` 已用 swiftc 编译为 arm64 Mach-O
-  验证通过（状态 + 打开 WebUI + 退出）。
+- `deploy/com.whitenight.service.plist.template`: RunAtLoad + KeepAlive + log path + PATH.
+- `scripts/install_launchd.sh`: The default is dry-run, `--install/--uninstall` is used to modify the system.
+- `scripts/check_service.sh`: health check (actually measured healthy).
+- Menu bar entry: `scripts/menu_bar/MenuBarStatus.swift` has been compiled to arm64 Mach-O with swiftc
+  Verification passed (status + open WebUI + exit).
 
-## 5. 实测与边界
+## 5. Actual measurement and boundaries
 
-- 真实服务 API：status/config/pause/resume 全部返回正确状态与候选时间。
-- 关闭 WebUI 后服务仍运行：后台循环在 API 进程内，与 WebUI 无耦合。
-- 真实 QQ 发送器阶段 8 接入；当前主动消息写入本地日志，不做假发送。
+- Real service API: status/config/pause/resume all returns the correct status and candidate time.
+- The service still runs after closing the WebUI: the background loop is within the API process and is not coupled to the WebUI.
+- Real QQ sender phase 8 access; the current active message is written to the local log and no false sending is performed.

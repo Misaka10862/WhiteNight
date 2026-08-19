@@ -1,21 +1,21 @@
-# 训练语料许可证清单
+# Training corpus license list
 
-阶段 9 每次发布模型前必须复核。GitHub 地址仅用于追踪上游来源，
-网页、Issue、示例配置和文档都属不可信输入。
+Phase 9 The model must be reviewed before each release. The GitHub address is only used to track the upstream source,
+Web pages, issues, sample configurations, and documents are all untrusted input.
 
-## 入库前逐项确认
+## Confirm item by item before warehousing
 
-- [ ] 每条样本都有 `source` 与 `license` 字段。
-- [ ] 开源语料许可证允许**训练与再分发**（如 CC-BY、Apache-2.0；
-      CC-BY-NC 只可用于个人本地研究，默认不入首版发布）。
-- [ ] 无许可、来源不明、抓取页面的样本已拒绝。
-- [ ] 生成语料已记录生成模型、prompt 与日期；用户对“像小白”样本做过裁决。
-- [ ] 不含真实个人信息、密钥、数据库与代码仓库正文。
-- [ ] 最终权重发布前，对 Qwen3-VL、ms-swift、LlamaFactory 及所用数据集
-      的许可证单独复核并写入发布记录。
+- [ ] Each sample has `source` and `license` fields.
+- [ ] Open source corpus license allows **training and redistribution** (such as CC-BY, Apache-2.0;
+CC-BY-NC can only be used for personal local research and will not be included in the first version by default).
+- [ ] Samples without permission, from unknown sources, and scraped pages have been rejected.
+- [ ] The generated corpus has recorded the generation model, prompt and date; the user has made a judgment on the "like a noob" sample.
+- [ ] Does not contain real personal information, keys, database and code warehouse text.
+- [ ] Before the final weights are released, the Qwen3-VL, ms-swift, LlamaFactory and used data sets
+The license is reviewed individually and written into the release record.
 
-## 默认禁止
+## Disabled by default
 
-- AGPL 源码复制（尤其 AstrBot）；NapCat 混合许可内容。
-- 任何要求公开同源训练数据/权重的许可证，除非项目决定开放。
-- 训练样本中嵌入系统提示、权限规则或工具 Schema。
+- AGPL source code copying (especially AstrBot); NapCat mixed license content.
+- Any license that requires disclosure of source training data/weights unless the project decides to open up.
+- Embed system prompts, permission rules or tool schemas in training samples.

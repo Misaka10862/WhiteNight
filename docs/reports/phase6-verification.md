@@ -1,46 +1,46 @@
-# 阶段 6 完整 WebUI 实测报告（2026-08-15）
+# Phase 6 complete WebUI test report (2026-08-15)
 
-> 复跑：`./scripts/check.sh`（ALL CHECKS PASSED）；`uv run pytest`（102 passed, 4 skipped）
+>Rerun: `./scripts/check.sh` (ALL CHECKS PASSED); `uv run pytest` (102 passed, 4 skipped)
 
-## 1. 工作台页面
+## 1. Workbench page
 
-| 页面 | 能力 |
+| Page | Capabilities |
 |---|---|
-| 聊天 | 会话列表、流式回复、图片上传、委派任务事件气泡 |
-| 会话 | 重命名、导出 Markdown/JSONL、删除（立即移除 + 无正文审计） |
-| 记忆 | 混合检索、事实增改删、冲突保留/放弃、情景记忆增删、导出 |
-| 任务 | 执行者/状态/风险/尝试次数/thread/产物/错误 + 中止 |
-| 审批 | 风险/范围/参数摘要 + 允许一次/允许本次会话/拒绝 |
-| 权限 | 工具风险规则表 + 会话授权撤销 |
-| 模型 | 数据库/模型/Hermes/Codex 健康状态 |
-| 约束 | SOUL.md / AGENTS.md 查看与编辑 |
-| 主动/日志/备份 | 诚实占位，能力在阶段 7/10 接入，不做假开关 |
+| Chat | Conversation list, streaming replies, image upload, delegated task event bubbles |
+| Session | Rename, export Markdown/JSONL, delete (immediate removal + no text audit) |
+| Memory | Mixed retrieval, fact addition, deletion, conflict retention/discard, episodic memory addition, deletion, export |
+| Task | Performer/Status/Risk/Number of Attempts/Thread/Product/Error + Abort |
+| Approval | Risk/Scope/Parameter Summary + Allow Once/Allow This Session/Deny |
+| Permissions | Tool Risk Rules Table + Session Authorization Revocation |
+| Model | Database/Model/Hermes/Codex Health Status |
+| Constraints | SOUL.md / AGENTS.md View and Edit |
+| Active/log/backup | Honest occupancy, capabilities are accessed in stage 7/10, no false switches |
 
-## 2. 配套后端 API（阶段 6 新增）
+## 2. Supporting backend API (new in phase 6)
 
 - `PATCH/DELETE /api/v1/sessions/{id}`、`GET .../export?fmt=`
 - `GET /api/v1/approvals/pending`、`POST .../{code}/approve|reject`
 - `GET /api/v1/policy/rules`、`GET/DELETE /api/v1/policy/grants[/{id}]`
-- `GET /api/v1/system/health`（DB + 模型 + Codex/Hermes 健康）
+- `GET /api/v1/system/health` (DB + model + Codex/Hermes health)
 - `GET/PUT /api/v1/rules/{SOUL|AGENTS}`
 
-## 3. 可用性与无障碍
+## 3. Usability and Accessibility
 
-- 窄窗口：导航折叠为汉堡按钮，会话列/分栏变单列（CSS @media）。
-- 键盘：聊天 Enter 发送、Shift+Enter 换行；表单原生提交。
-- aria-label 覆盖主导航、聊天输入、图片选择、各页面 section；
-  任务/审批状态用文本标记，错误用 role="alert"。
+- Narrow window: Navigation collapses into a hamburger button, and session columns/columns become single columns (CSS @media).
+- Keyboard: Chat Enter to send, Shift+Enter to wrap; form native submission.
+- aria-label covers main navigation, chat input, image selection, and each page section;
+  Task/approval status is marked with text and errors with role="alert".
 
-## 4. 实测
+## 4. Actual measurement
 
-- 前端：eslint ✓、tsc ✓、vite build ✓（85 modules）。
-- Vite 代理全链路：创建/重命名/导出/删除会话、事实增删与检索、
-  任务/审批/权限/模型/规则读取，全部通过。
-- 真实 Ollama 流式聊天经 Vite WebSocket 代理：`只回复两个字：在的` → 「在的」。
-- 后端 102 tests：含会话删除审计、审批不可重放、会话授权撤销、
-  规则文件安全读写、系统健康。
+- Front-end: eslint ✓, tsc ✓, vite build ✓ (85 modules).
+- Vite agent full link: create/rename/export/delete sessions, fact addition, deletion and retrieval,
+  Task/Approval/Permission/Model/Rule Reading, all passed.
+- Real Ollama streaming chat via Vite WebSocket proxy: `Reply only two words: In' → "In".
+- Backend 102 tests: including session deletion audit, approval non-replayable, session authorization revocation,
+  Rule files are read and written safely and the system is healthy.
 
-## 5. 边界
+## 5. Boundary
 
-- 真实浏览器视觉回归需用户人工确认（tsc/build/API 已覆盖）。
-- 主动消息、日志与备份页面为占位；对应后端按阶段 7/10 交付。
+- Real browser visual regression requires user manual confirmation (tsc/build/API has been covered).
+- Active messages, logs and backup pages are placeholders; the corresponding backend will be delivered in Phase 7/10.
