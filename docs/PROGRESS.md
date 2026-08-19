@@ -3,7 +3,7 @@
 > 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
 > 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
 
-最后更新：2026-08-16（巡检审计：修复记忆提取抢占推理槽；新增保活脚本与文档）
+最后更新：2026-08-19（修复 QQ 下载失败；新增 OpenAI-compatible 云端 Provider；MIT 发布审计）
 
 ## 当前阶段
 
@@ -179,6 +179,11 @@
 - 语义召回默认关闭：`embedding_model` 为空时只有 FTS5 词法，自然语言问句需要先配小型嵌入模型
 
 ## 问题记录
+
+14. ✅ **QQ 文件/图片下载失败（2026-08-19）**：下载请求错误继承桌面代理，且未跟随
+    NapCat 常见重定向；现已固定直连、跟随重定向、流式限制 16 MiB，并按响应类型识别图片 MIME。
+15. ✅ **云端模型支持（2026-08-19）**：新增 OpenAI-compatible Provider。默认仍为本地 Ollama；
+    选择 `model_provider: openai` 后，API Key 仅从 macOS Keychain account `openai_api_key` 读取。
 
 1. **GitHub push 被拒/不稳定**：OAuth 凭据缺 `workflow` scope（主要阻塞），且直连
    间歇性 HTTP2 framing 错误/超时。本地提交与 tag 完好。

@@ -7,7 +7,8 @@
 
 - `complete(messages, images, tools) -> AsyncIterator[ModelEvent]`：流式文本/工具调用事件；
 - `health() -> ModelHealth`：延迟、显存、模型列表；
-- 实现：Ollama（阶段 1 验证 `qwen3-vl:8b`）；未来可替换其它推理后端。
+- 实现：Ollama（阶段 1 验证 `qwen3-vl:8b`）与 OpenAI-compatible Chat Completions；
+  云端凭据只从 Keychain 读取，默认仍使用本地 Ollama。
 
 ## SearchProvider
 

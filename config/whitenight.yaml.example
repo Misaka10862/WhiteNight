@@ -26,6 +26,10 @@ keychain_service: com.whitenight.credentials
 # --- 模型与上下文 ---
 # 临时最小验证：文本模型 + SOUL.md 人格；LoRA 视觉模型完成后切回 qwen3-vl:8b
 model_name: qwen3:8b
+model_provider: ollama       # ollama | openai
+openai_base_url: https://api.openai.com/v1
+openai_api_key_account: openai_api_key
+openai_timeout_s: 120.0
 model_supports_vision: false   # 切回 qwen3-vl:8b 时改为 true
 model_max_output_tokens: 2048  # Ollama num_predict 上限，防止退化生成无限循环
 ollama_keep_alive: "-1"        # -1=常驻（内部转数字）；也可写 5m/1h；避免闲置后首条消息等待重新加载

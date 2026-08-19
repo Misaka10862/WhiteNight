@@ -50,4 +50,4 @@ npm run dev                  # http://127.0.0.1:5173，/api 与 WebSocket 已代
 
 ## 许可证
 
-私有项目。依赖各自的许可证以 `uv.lock` / `package-lock.json` 为准，外部参考项目使用约束见构建计划第 21 节。
+本项目以 MIT 许可证开源。依赖各自的许可证以 `uv.lock` / `package-lock.json` 为准；不要提交本地配置、数据库、日志、备份、密钥或模型权重。

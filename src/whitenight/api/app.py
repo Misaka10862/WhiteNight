@@ -31,6 +31,7 @@ from whitenight.channels.types import (
     SessionSummary,
 )
 from whitenight.config import DEFAULT_CONFIG_PATH, Settings, load_settings
+from whitenight.credentials.keychain import get_keychain
 from whitenight.delegates.codex import CodexAdapter
 from whitenight.delegates.hermes import HermesGatewayAdapter
 from whitenight.delegates.manager import DelegateManager, TaskRecord, TaskStore
@@ -55,6 +56,7 @@ from whitenight.memory.types import (
 )
 from whitenight.models.base import ModelProvider
 from whitenight.models.ollama import OllamaProvider
+from whitenight.models.openai import OpenAIProvider
 from whitenight.policy.approvals import ApprovalService, SessionGrantRecord
 from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import PolicyEngine
@@ -147,12 +149,27 @@ def create_app(
             ),
         )
         store = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
-        provider = model_provider or OllamaProvider(
-            base_url=settings.ollama_base_url,
-            model=settings.model_name,
-            max_output_tokens=settings.model_max_output_tokens,
-            keep_alive=settings.ollama_keep_alive,
-        )
+        if model_provider is not None:
+            provider = model_provider
+        elif settings.model_provider == "openai":
+            keychain = get_keychain(settings.keychain_backend)
+            provider = OpenAIProvider(
+                base_url=settings.openai_base_url,
+                model=settings.model_name,
+                api_key=None,
+                timeout_s=settings.openai_timeout_s,
+                max_output_tokens=settings.model_max_output_tokens,
+                key_provider=lambda: keychain.get(
+                    settings.keychain_service, settings.openai_api_key_account
+                ),
+            )
+        else:
+            provider = OllamaProvider(
+                base_url=settings.ollama_base_url,
+                model=settings.model_name,
+                max_output_tokens=settings.model_max_output_tokens,
+                keep_alive=settings.ollama_keep_alive,
+            )
         audit = AuditService(engine)
         approvals = ApprovalService(engine)
         extractor = memory_extractor or _build_memory_extractor(settings, provider)

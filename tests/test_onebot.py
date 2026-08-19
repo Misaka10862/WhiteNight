@@ -207,6 +207,32 @@ def test_onebot_sender_retries(monkeypatch) -> None:
     assert len(calls) == 2
 
 
+def test_download_follows_redirects_without_proxy(monkeypatch) -> None:
+    import asyncio
+
+    from whitenight.channels.onebot.adapter import OneBotAdapter
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/file"}, request=request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            content=b"ok",
+            request=request,
+        )
+
+    adapter = object.__new__(OneBotAdapter)
+    original = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    assert asyncio.run(adapter._download("http://local/start")) == b"ok"
+
+
 def asyncio_run(coro):
     import asyncio
 

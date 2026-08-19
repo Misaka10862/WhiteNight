@@ -247,22 +247,43 @@ class OneBotAdapter:
         return {"name": safe_name, "path": str(target)}
 
     async def _download(self, url: str, max_bytes: int = 16 * 1024 * 1024) -> bytes:
-        trust_env = url.startswith(("https://",))
-        async with httpx.AsyncClient(timeout=30.0, trust_env=trust_env) as client:
-            response = await client.get(url)
+        content, _ = await self._download_content(url, max_bytes=max_bytes)
+        return content
+
+    async def _download_content(
+        self, url: str, max_bytes: int = 16 * 1024 * 1024
+    ) -> tuple[bytes, str | None]:
+        # OneBot/NapCat URLs are often local HTTP endpoints. Never inherit a
+        # desktop proxy here: it can turn a valid local download into a 502.
+        async with (
+            httpx.AsyncClient(timeout=30.0, trust_env=False, follow_redirects=True) as client,
+            client.stream("GET", url) as response,
+        ):
             response.raise_for_status()
-            return response.content[:max_bytes]
+            content_length = response.headers.get("content-length")
+            if content_length and int(content_length) > max_bytes:
+                raise ValueError("下载文件超过大小限制")
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.aiter_bytes():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("下载文件超过大小限制")
+                chunks.append(chunk)
+            return b"".join(chunks), response.headers.get("content-type")
 
     async def _download_as_data_url(self, url: str) -> str | None:
         try:
-            content = await self._download(url)
-            mime = "image/png"
-            if url.lower().endswith((".jpg", ".jpeg")):
-                mime = "image/jpeg"
-            elif url.lower().endswith(".gif"):
-                mime = "image/gif"
-            elif url.lower().endswith(".webp"):
-                mime = "image/webp"
+            content, content_type = await self._download_content(url)
+            mime = (content_type or "").split(";", 1)[0].strip() or ""
+            if not mime.startswith("image/"):
+                mime = "image/png"
+                if url.lower().split("?", 1)[0].endswith((".jpg", ".jpeg")):
+                    mime = "image/jpeg"
+                elif url.lower().split("?", 1)[0].endswith(".gif"):
+                    mime = "image/gif"
+                elif url.lower().split("?", 1)[0].endswith(".webp"):
+                    mime = "image/webp"
             encoded = base64.b64encode(content).decode("ascii")
             return f"data:{mime};base64,{encoded}"
         except Exception:

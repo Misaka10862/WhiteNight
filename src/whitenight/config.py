@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # 模型与上下文（阶段 2 最小纵向链路；阶段 4 记忆）
     # 临时最小验证方案：LoRA 暂缓，先使用本地 qwen3:8b 文本模型 + SOUL.md 人格。
     model_name: str = "qwen3:8b"
+    model_provider: Literal["ollama", "openai"] = "ollama"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key_account: str = "openai_api_key"
+    openai_timeout_s: float = 120.0
     model_supports_vision: bool = False  # qwen3:8b 无视觉；LoRA 后切回 qwen3-vl 并置 true
     model_max_output_tokens: int = 2048  # Ollama num_predict 上限，防止退化成无限生成
     ollama_keep_alive: str = "-1"  # -1 常驻内存；默认 5m 会在闲置后卸载导致下次回复延迟
