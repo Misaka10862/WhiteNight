@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "WhiteNight（白夜）—— 本地优先的个人 AI 智能体"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = { file = "LICENSE" }
 authors = [{ name = "Misaka10862" }]
 keywords = ["agent", "local-first", "companion", "macos"]
 classifiers = [
