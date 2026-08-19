@@ -1,51 +1,51 @@
-# 阶段 10 发布加固 实测报告（2026-08-15）
+# Phase 10 release reinforcement actual test report (2026-08-15)
 
-> 复跑：`uv run pytest`（125 passed, 4 skipped）；`./scripts/check.sh` 通过。
+>Rerun: `uv run pytest` (125 passed, 4 skipped); `./scripts/check.sh` passed.
 
-## 1. 加密备份与恢复
+## 1. Encrypted backup and recovery
 
-- 格式：`WNBK1 | salt(16B) | Fernet(token(tar.gz))`；PBKDF2-SHA256 600k 派生密钥。
-- 内容：SQLite online backup（服务运行中也可备份）+ `data/attachments`。
+- Format: `WNBK1 | salt(16B) | Fernet(token(tar.gz))`; PBKDF2-SHA256 600k derived key.
+- Content: SQLite online backup (can also be backed up while the service is running) + `data/attachments`.
 - CLI：`generate-key / backup / verify / preview / restore`；
-  恢复密钥走 `WHITENIGHT_BACKUP_KEY` 或 `--passphrase`。
-- 恢复保护：`/healthz` 存活时拒绝；当前库先改名安全备份；失败自动回滚。
-- **实测**：
-  - 临时库：备份 → verify/preview（sessions=1, messages=1）→ 恢复替换，
-    恢复前新增数据被丢弃且旧数据完整回来。
-  - 错误密钥被拒（解密失败）。
-  - dev 数据库真实加密备份 9869 字节，verify/preview 通过。
+To restore the key, use `WHITENIGHT_BACKUP_KEY` or `--passphrase`.
+- Recovery protection: `/healthz` is rejected when alive; the current library is renamed for safe backup; failure automatically rolls back.
+- **Actual Measurement**:
+  - Temporary library: backup → verify/preview (sessions=1, messages=1) → restore and replace,
+Before recovery, new data is discarded and old data is returned intact.
+  - Bad key rejected (decryption failed).
+  - The real encrypted backup of the dev database is 9869 bytes, verify/preview passed.
 
-## 2. 诊断与日志
+## 2. Diagnosis and logs
 
-- `scripts/diagnostics.py --json`：DB 完整性/迁移版本/磁盘/附件/
-  待审批数/Ollama/Codex/Hermes/日志尾部，实测全绿。
-- 日志落盘 `data/logs/whitenight.log`（写入脱敏过滤器）。
-- `/api/v1/logs?lines=N` + WebUI 日志页（5s 刷新）。
+- `scripts/diagnostics.py --json`: DB integrity/migrations/disk/attachments/
+  The number of approvals pending/Ollama/Codex/Hermes/ at the end of the log, the actual measurement is all green.
+- The log is saved to `data/logs/whitenight.log` (writes the desensitization filter).
+- `/api/v1/logs?lines=N` + WebUI log page (5s refresh).
 
-## 3. 稳定性工具
+## 3. Stability tools
 
-- `scripts/load_smoke.sh`：30 轮会话创建/列表/状态/删除冒烟。
-- `scripts/run_72h.py --hours 72`：每分钟健康检查，异常计数与 JSONL 记录。
+- `scripts/load_smoke.sh`: 30 rounds of session creation/list/status/deletion smoke.
+- `scripts/run_72h.py --hours 72`: health check every minute, exception count and JSONL logging.
 
-## 4. 文档
+## 4. Documentation
 
-- `docs/INSTALL.md`：安装、首次启动、系统权限、QQ 配置、备份密钥。
-- `docs/OPERATIONS.md`：健康检查、迁移回滚、备份恢复、常见故障。
-- `docs/RELEASE_CHECKLIST.md`：构建计划第 18 节逐项勾稽。
+- `docs/INSTALL.md`: installation, first startup, system permissions, QQ configuration, backup key.
+- `docs/OPERATIONS.md`: health check, migration rollback, backup and recovery, common faults.
+- `docs/RELEASE_CHECKLIST.md`: Section 18 of the construction plan is checked item by item.
 
-## 5. 待用户执行（不能自动化）
+## 5. To be executed by the user (cannot be automated)
 
-- 72 小时持续运行 + 睡眠唤醒/网络中断实测。
-- 真实浏览器视觉回归；NapCat QQ 登录与真实链路；Hermes Provider 登录。
-- LoRA 训练/盲测选择默认模型；GitHub push（workflow scope）。
+- 72 hours of continuous operation + actual test of sleep wake-up/network interruption.
+- Real browser visual return; NapCat QQ login and real link; Hermes Provider login.
+- LoRA training/blind testing selects the default model; GitHub push (workflow scope).
 
-## 6. 安全红队与性能（第 12 轮补充）
+## 6. Security Red Teaming and Performance (Round 12 Supplement)
 
-- `evals/security/golden.jsonl` 8 项；新增提示注入不变更规则、SSRF 回环/私网
-  请求在 Provider 前拒绝；原有批量删除/审批重放/非 owner/附件 MIME/日志脱敏
-  全部纳入清单。
-- `tests/test_performance.py`：100 会话消息、200 消息上下文预算、200 事实 FTS、
-  100 次路由全部在宽松阈值内。
-- `scripts/e2e_smoke.py`：dummy 与 real-ollama 两种模式均通过（会话/流式聊天/
-  记忆/主动消息/加密备份）。
-- 最终 `uv run pytest`：132 passed, 4 skipped。
+- `evals/security/golden.jsonl` 8 items; new prompt injection no change rules, SSRF loopback/private network
+  The request is rejected before the Provider; original batch deletion/approval replay/non-owner/attachment MIME/log desensitization
+  All included in the list.
+- `tests/test_performance.py`: 100 session messages, 200 message context budget, 200 fact FTS,
+  All 100 routes are within the relaxed threshold.
+- `scripts/e2e_smoke.py`: Both dummy and real-ollama modes pass (session/streaming chat/
+  memory/active messaging/encrypted backup).
+- Final `uv run pytest`: 132 passed, 4 skipped.

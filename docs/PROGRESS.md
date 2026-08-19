@@ -1,246 +1,246 @@
-# WhiteNight 构建进度（过程性文档）
+# WhiteNight build progress (procedural documentation)
 
-> 本文件随每次构建更新：记录已完成、未完成、问题与下一步。
-> 构建大纲：`构建计划.md`。阶段结论与实测证据见 `docs/reports/`。
+> This file is updated with each build: recording completed, incomplete, issues and next steps.
+> Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
-最后更新：2026-08-19（修复 QQ 下载失败；新增 OpenAI-compatible 云端 Provider；MIT 发布审计）
+Last update: 2026-08-19 (Fixed QQ download failure; added OpenAI-compatible cloud Provider; MIT release audit)
 
-## 当前阶段
+## Current stage
 
-- **最小验证方案（用户确认）**：LoRA 训练暂缓；临时使用本机 `qwen3:8b`
-  文本模型 + SOUL.md 预设人格跑通最小验证；之后再按正式计划训练带视觉能力的模型。
-  `scripts/e2e_smoke.py --real-model` 实测通过（流式聊天/记忆/主动状态/备份）。
-- **NapCat + QQ 真实链路已打通**：QQ 小号已扫码登录（QQ 以 `--no-sandbox` 重启，
-  WebUI 6099 / OneBot HTTP 服务端 3000 上线）。NapCat 网络配置已完成：
-  HTTP 客户端上报 WhiteNight `http://127.0.0.1:8765/api/v1/onebot/events`；
-  HTTP 服务端 `127.0.0.1:3000` 供 WhiteNight 发送 `send_private_msg`。
-  WhiteNight 已配置 `qq_enabled=true` + owner 白名单（QQ 号只留在本地
-  `config/whitenight.yaml`，不写入本仓库），后端已重启生效。
-  实测：`qq_link_check.py` 输出 `QQ LINK READY`；真实 QQ 收到两条消息——直发测试
-  （OneBotSender）与模拟私聊事件经「Adapter→会话→qwen3:8b→回复回传 QQ」的闭环回复；
-  `get_friend_msg_history` 复核送达。`proactive_sender: qq` 可选（默认仍为 log）。
-- **收尾审计（本轮）**：`scripts/diagnostics.py --json` 全绿（DB integrity/alembic 0007、
-  Ollama、Codex CLI、Hermes Gateway、磁盘/附件）；`scripts/e2e_smoke.py --real-model`
-  输出 `E2E SMOKE OK (real-ollama)`；`./scripts/check.sh` 142 passed / 4 skipped 全绿；
-  `docs/FINAL_STATUS.md` 已同步为当前真实状态（QQ 完成、72h 进行中、剩余用户操作清单）。
-- **回复延迟优化（本轮）**：Ollama 默认 5m 闲置卸载导致下一条消息冷启动 ~17s；
-  已增加 `ollama_keep_alive` 配置。**不再是写死的默认值**：WebUI「模型与 Agent」
-  页面可下拉选择 `-1/5m/30m/1h/6h/12h`，`GET/PUT /api/v1/model/config` 即时更新
-  运行中的 Provider 并写入 `config/whitenight.yaml`（写前自动备份），重启保持。
-  QQ 闭环实测「事件→回复回传」4.5s；`ollama ps` 显示 `UNTIL: Forever`。
-  代价：qwen3:8b 常驻约 5.6GB；如需释放可在 Dashboard 选 5m 或 `ollama stop qwen3:8b`。
-- **巡检审计（本轮）**：检查 2026-08-15 下午至今的运行记录。72h 巡检 666 checks /
-  0 failures；DB integrity ok；diagnostics 全绿；无进程崩溃，Ollama 的 killed 告警
-  均为修复失控生成时的主动操作。发现并修复：后台记忆提取用满 2048 token（实测单次
-  占推理槽 2 分 3 秒）→ 提取单独限长 512 token + 延迟 15s + 新消息到达立即取消，
-  实测提取降至 1.1s/209 tokens。新增 `scripts/keep_awake.sh` 供接电源时防睡眠保活。
-- **QQ 戳一戳识别（本轮）**：NapCat 会把「戳一戳」上报为 `type: "poke"` 消息段、
-  文本为空；旧逻辑把它当空消息交给模型，Dashboard 显示「（空消息）」。
-  现在 `parse_segments` 识别 poke 段并注入显式上下文「（主人刚刚在QQ上戳了戳我，
-  类型：xxx）」，模型能生成被戳的专属反应，会话里也有可见记录。
-  同时修复启动后业务日志丢失：Alembic `fileConfig` 会禁用业务 logger / 替换
-  root handler；`uvicorn log_config=None` + 迁移后重设日志 + `disable_existing_loggers=False`。
-  实测日志出现 `poke=True text=''`，140 passed / 4 skipped。
-- **Ollama 失控生成（根因已修复）**：QQ 两次“无回复”都不是内存或 Ollama 假死，
-  而是 qwen3:8b 偶发退化循环——请求未设置 `num_predict`，实测单次生成跑到
-  `n_decoded > 4000` 仍不结束，占住唯一推理槽。修复：Ollama Provider 增加
-  `model_max_output_tokens`（默认 2048）→ `/api/chat` `options.num_predict`；
-  契约测试锁定 payload；真实 QQ 闭环自检回复「上限修复完成」。详见问题 12。
-- **72 小时持续运行**：进行中（2026-08-15T08:42Z 启动）；当前 666 checks / 0 failures。
-  70 个 >5.5 分钟的空档与 `pmset` 睡眠记录吻合（电池供电时每 ~15 分钟 Maintenance
-  Sleep），非应用故障；睡眠期间 QQ 无法即时回复，接电源时可用
-  `scripts/keep_awake.sh start` 保活。
-  期间追加 30 轮负载冒烟（4.55s 通过），服务保持稳定。
-- **视觉回归**：本机 Microsoft Edge headless 完成桌面 1280×900 与窄窗 480×800 截图，
-  DOM 验证 11 个导航页/聊天输入/aria 标签全部渲染；截图保存在 `/tmp/wn-*.png`
-  （当前模型无法读图，人工查看截图由用户完成）。
+- **Minimal Authentication Scheme (User Confirmation)**: LoRA training suspended; temporary use of native `qwen3:8b`
+  Text model + SOUL.md presets the personality to pass the minimum verification; then the model with visual ability will be trained according to the formal plan.
+  `scripts/e2e_smoke.py --real-model` passed the actual test (streaming chat/memory/active state/backup).
+- **NapCat + QQ real link has been opened**: QQ account has scanned the code to log in (QQ restarted with `--no-sandbox`,
+  WebUI 6099 / OneBot HTTP server 3000 is online). NapCat network configuration is complete:
+  The HTTP client reports WhiteNight `http://127.0.0.1:8765/api/v1/onebot/events`;
+  HTTP server `127.0.0.1:3000` for WhiteNight to send `send_private_msg`.
+  WhiteNight has been configured `qq_enabled=true` + owner whitelist (QQ number is only kept locally
+  `config/whitenight.yaml`, not written to this repository), the backend has been restarted to take effect.
+Actual test: `qq_link_check.py` outputs `QQ LINK READY`; real QQ receives two messages - direct test
+  (OneBotSender) Closed-loop reply to simulated private chat events via "Adapter → Session → qwen3:8b → Reply to QQ";
+  `get_friend_msg_history` Review delivery. `proactive_sender: qq` Optional (default is still log).
+- **Final audit (this round)**: `scripts/diagnostics.py --json` all green (DB integrity/alembic 0007,
+  Ollama, Codex CLI, Hermes Gateway, disk/attachment); `scripts/e2e_smoke.py --real-model`
+  Output `E2E SMOKE OK (real-ollama)`; `./scripts/check.sh` 142 passed / 4 skipped All green;
+  `docs/FINAL_STATUS.md` has been synchronized to the current real status (QQ completed, 72h in progress, remaining user operation list).
+- **Reply delay optimization (this round)**: Ollama's default 5m idle uninstallation causes the next message to be cold-started ~17s;
+  `ollama_keep_alive` configuration has been added. **No longer a hard-coded default**: WebUI "Model and Agent"
+  The page can be scrolled down to select `-1/5m/30m/1h/6h/12h`, `GET/PUT /api/v1/model/config` will be updated immediately
+  Running Provider and write `config/whitenight.yaml` (automatic backup before writing), restart and persist.
+  QQ closed-loop actual test "event→reply back" 4.5s; `ollama ps` displays `UNTIL: Forever`.
+  Cost: qwen3:8b is resident at about 5.6GB; if you need to release it, select 5m or `ollama stop qwen3:8b` in the Dashboard.
+- **Inspection Audit (Current Round)**: Check the operation records from the afternoon of 2026-08-15 to now. 72h inspection 666 checks /
+  0 failures; DB integrity ok; diagnostics all green; no process crashes, Ollama’s killed alarm
+  They are all proactive operations to repair runaway generation. Discovered and fixed: Backend memory retrieval used up 2048 tokens (actual test single time
+  Accounting for 2 minutes and 3 seconds of inference slot) → Extract a separate limit of 512 tokens + delay 15s + cancel immediately when new messages arrive,
+  The measured extraction dropped to 1.1s/209 tokens. Added `scripts/keep_awake.sh` to prevent sleep and keep alive when connected to power.
+- **QQ poke recognition (this round)**: NapCat will report "poke" as a `type: "poke"` message segment,
+  The text is empty; the old logic passes it to the model as an empty message, and the Dashboard displays "(empty message)".
+Now `parse_segments` recognizes poke segments and injects explicit context "(The master just poked me on QQ,
+  Type: xxx)", the model can generate unique responses for being poked, and there are also visible records in the session.
+  At the same time, the business log loss after startup is fixed: Alembic `fileConfig` will disable the business logger/replacement
+  root handler; `uvicorn log_config=None` + reset logs after migration + `disable_existing_loggers=False`.
+  The actual measurement log shows `poke=True text=''`, 140 passed / 4 skipped.
+- **Ollama is generated out of control (the root cause has been fixed)**: QQ's two "no replies" are not memory or Ollama's suspended animation,
+  Instead, qwen3:8b has an occasional degradation cycle - the request does not set `num_predict`, and the measured single generation ran to
+  `n_decoded > 4000` still does not end, occupying the only inference slot. Fix: Ollama Provider added
+  `model_max_output_tokens` (default 2048) → `/api/chat` `options.num_predict`;
+  The contract test locks the payload; the real QQ closed-loop self-test replies "upper limit repair completed". See question 12 for details.
+- **72 hours continuous operation**: In progress (launched at 2026-08-15T08:42Z); currently 666 checks / 0 failures.
+  70 >5.5 min slots matched with `pmset` sleep records (every ~15 min Maintenance on battery power
+  Sleep), not an application fault; QQ cannot reply immediately during sleep, but can be used when connected to the power supply
+  `scripts/keep_awake.sh start` Keep alive.
+  During this period, 30 rounds of load smoke were added (passed in 4.55s), and the service remained stable.
+- **Visual Return**: Native Microsoft Edge headless complete desktop 1280×900 and narrow window 480×800 screenshots,
+  DOM verification All 11 navigation pages/chat input/aria tags are rendered; screenshots are saved in `/tmp/wn-*.png`
+  (The current model cannot read images, and manual viewing of screenshots is done by the user).
 
-## 已完成
+## Completed
 
-### 阶段 0 · 工程初始化 ✅
-- uv + Python 3.12、React/Vite/TS 前端、依赖锁、ruff/mypy/pytest、CI（无模型）
-- 配置分层、Keychain、SQLCipher/Alembic、日志脱敏、ADR、契约文档、SOUL/AGENTS
+### Phase 0 · Project initialization ✅
+- uv + Python 3.12, React/Vite/TS front-end, dependency lock, ruff/mypy/pytest, CI (no model)
+- Configuration layering, Keychain, SQLCipher/Alembic, log desensitization, ADR, contract documents, SOUL/AGENTS
 - Git：`bcb46a2`、`4a365d5`；tag `phase-0`
 
-### 阶段 1 · 高风险能力验证 ✅
-- qwen3-vl:8b 文本 2.2s / 视觉内容 11.5s / 工具调用 Schema 通过；图片须挂 message
-- Hermes Gateway 可启动；cua-driver 0.19.3 已安装（TCC 待用户授权）
-- Codex MCP stdio 握手通过；SQLCipher/Keychain 原型通过
-- Git：`4b0ee79`、`5656a07`；报告 `docs/reports/phase1-verification.md`
+### Phase 1 · High Risk Proficiency Testing ✅
+- qwen3-vl:8b text 2.2s / visual content 11.5s / tool call Schema passed; pictures must be attached message
+- Hermes Gateway is bootable; cua-driver 0.19.3 is installed (TCC pending user authorization)
+- Codex MCP stdio handshake passed; SQLCipher/Keychain prototype passed
+- Git: `4b0ee79`, `5656a07`; report `docs/reports/phase1-verification.md`
 
-### 阶段 2 · 最小纵向链路 ✅
-- 统一消息/会话 + 迁移 0002；ModelProvider/Ollama 流式；SOUL 上下文预算
-- `/api/v1/chat/ws` 流式聊天 + 图片附件 + 会话持久化；WebUI 聊天/上传/恢复
-- 实测重启恢复与 Vite 代理链路；ADR-0003、`docs/contracts/chat-ws.md`
+### Phase 2 · Minimal vertical link ✅
+- Unified Messaging/Session + Migration 0002; ModelProvider/Ollama Streaming; SOUL Context Budget
+- `/api/v1/chat/ws` streaming chat + image attachment + session persistence; WebUI chat/upload/restore
+- Actual test restart recovery and Vite proxy link; ADR-0003, `docs/contracts/chat-ws.md`
 - Git：`a302d0c`
 
-### 阶段 3 · 工具、文件与文档 ✅
-- PolicyEngine/一次性审批/会话授权/审计 + 迁移 0003；ToolExecutor 唯一入口
-- 文件读写移动废纸篓删除、截图、搜索（DDG Lite + Bing 兜底）、页面提取
-- 文本/代码、PDF（扫描页 OCR）、DOCX/XLSX/PPTX、图片 Apple Vision OCR、zip/tar 列表
-- 70 个测试（含权限红队）；报告 `docs/reports/phase3-verification.md`
+### Phase 3 · Tools, Files & Documentation ✅
+- PolicyEngine/one-time approval/session authorization/audit + migration 0003; ToolExecutor only entrance
+- File reading and writing, mobile wastebasket deletion, screenshots, search (DDG Lite + Bing), page extraction
+- Text/code, PDF (scanned page OCR), DOCX/XLSX/PPTX, image Apple Vision OCR, zip/tar list
+- 70 tests (including permissioned red teaming); report `docs/reports/phase3-verification.md`
 - Git：`1e5af82`
 
-### 阶段 4 · 长期记忆 ✅（本轮）
-- 三层模型：profile_facts / episodic_memories / session_summaries + 迁移 0004（FTS5 + 触发器）
-- MemoryService：去重、冲突检测、编辑旧值立即失效、删除、导出 JSONL/Markdown
-- 提取器：Ollama（严格 JSON）+ 规则回退 + 主回复后异步提取（不阻塞聊天）
-- 混合召回：FTS5 词法 + 嵌入接口 + 时间衰减 + 访问加成；嵌入模型按需加载
-- REST API：facts/episodes CRUD、冲突解决、retrieve、extract、export、summary
-- 87 passed / 3 skipped；真实 Ollama 提取出 `居住地：杭州`、`喜好：雨天散步` 并可词法召回
-- 报告：`docs/reports/phase4-verification.md`
+### Stage 4 · Long-term memory ✅ (this round)
+- Three-tier model: profile_facts/episodic_memories/session_summaries + migration 0004 (FTS5 + triggers)
+- MemoryService: deduplication, conflict detection, immediate invalidation of old values after editing, deletion, and export to JSONL/Markdown
+- Extractor: Ollama (strict JSON) + rule fallback + asynchronous extraction after main reply (no blocking chat)
+- Hybrid recall: FTS5 lexicon + embedding interface + time decay + access bonus; embedding model is loaded on demand
+- REST API: facts/episodes CRUD, conflict resolution, retrieve, extract, export, summary
+- 87 passed / 3 skipped; the real Ollama extracts `Residence: Hangzhou`, `Hobby: Walking on rainy days` and can recall it lexically
+- Report: `docs/reports/phase4-verification.md`
 
-### 阶段 5 · 路由与 Agent 委派 ✅（本轮）
-- 路由：规则优先（用户指定/图片/代码/GUI/记忆/搜索/文件）+ 可选 LLM 结构化输出 + 本地兜底
-- 黄金路由集 `evals/routing/golden.jsonl`（16 例），目标准确率 ≥ 0.9 实测通过
-- 统一委派事件（started/progress/result/error/aborted）+ DelegateProvider 协议
-- Codex MCP Adapter：stdio JSON-RPC、initialize/tools、codex/codex-reply 线程续接、
-  沙箱 workspace-write、审批策略 on-request；真实握手测试通过
-- Hermes Gateway Adapter：健康/认证契约；submit 在用户登录 Provider 前安全快速失败
-- DelegateManager：任务持久化（迁移 0005）、有限重试、中止、不可用快速失败；
-  ChatService 集成后委派失败不破坏主会话（实测可继续本地聊天）
-- 任务 API：/api/v1/tasks 列表/详情/中止
+### Phase 5 · Routing and Agent Delegation ✅ (this round)
+- Routing: Rule priority (user-specified/picture/code/GUI/memory/search/file) + optional LLM structured output + local security
+- Golden routing set `evals/routing/golden.jsonl` (16 examples), target accuracy ≥ 0.9, passed the actual test
+- Unified delegation events (started/progress/result/error/aborted) + DelegateProvider protocol
+- Codex MCP Adapter: stdio JSON-RPC, initialize/tools, codex/codex-reply thread continuation,
+  Sandbox workspace-write, approval policy on-request; real handshake test passed
+- Hermes Gateway Adapter: health/authentication contract; submit fails safely and quickly before the user logs in to the Provider
+- DelegateManager: task persistence (migration 0005), limited retry, abort, unavailable fast failure;
+  Delegation failure after ChatService integration does not destroy the main session (in actual testing, local chat can continue)
+- Task API: /api/v1/tasks list/details/aborted
 - 97 passed / 4 skipped
-- 报告：`docs/reports/phase5-verification.md`（随提交补齐）
+- Report: `docs/reports/phase5-verification.md` (completed with submission)
 
-### 阶段 6 · 完整 WebUI ✅（本轮）
-- 工作台导航：聊天/会话/记忆/任务/审批/权限/模型/约束/主动/日志/备份
-- 聊天页：会话列表、流式气泡、图片、委派任务事件气泡；会话页：重命名/导出/删除
-- 记忆页：检索、事实增改删、冲突保留/放弃、情景记忆、JSONL/Markdown 导出
-- 任务页：执行者/状态/风险/产物/错误/中止；审批页：风险/参数摘要/允许/拒绝
-- 权限页：工具风险规则 + 会话授权撤销；模型页：DB/模型/Hermes/Codex 健康
-- 约束页：SOUL.md / AGENTS.md 查看编辑（服务端安全写入）
-- 主动消息/日志/备份页面：诚实占位（能力分别在阶段 7/10 接入，不做假开关）
-- 后端配套 API：会话 rename/delete/export、approvals approve/reject、policy rules/grants、
-  system health、rules 读写；102 passed / 4 skipped
-- 窄窗口响应式布局 + 键盘 Enter 发送 + 导航/aria 标签
-- 实测：Vite 代理下会话/记忆/任务/审批/权限/模型/规则全链路 + 真实 Ollama 流式聊天通过
-- 报告：`docs/reports/phase6-verification.md`
+### Stage 6 · Complete WebUI ✅ (this round)
+- Workbench navigation: Chat/Session/Memory/Task/Approval/Permissions/Model/Constraints/Active/Log/Backup
+- Chat page: conversation list, streaming bubbles, pictures, delegated task event bubbles; conversation page: rename/export/delete
+- Memory page: retrieval, fact addition, modification and deletion, conflict retention/discard, episodic memory, JSONL/Markdown export
+- Task page: Performer/Status/Risk/Product/Error/Abort; Approval page: Risk/Parameter Summary/Allow/Deny
+- Permission page: Tool risk rules + session authorization revocation; Model page: DB/Model/Hermes/Codex Health
+- Constraint page: SOUL.md / AGENTS.md View and edit (server-side safe writing)
+- Active message/log/backup page: honest occupancy (capabilities are accessed in stages 7/10 respectively, no false switches are made)
+- Backend supporting API: session rename/delete/export, approvals approve/reject, policy rules/grants,
+  system health, rules read and write; 102 passed / 4 skipped
+- Narrow window responsive layout + keyboard Enter to send + navigation/aria tag
+- Actual test: full link of session/memory/task/approval/permission/model/rules under Vite agent + real Ollama streaming chat passed
+- Report: `docs/reports/phase6-verification.md`
 
-### 阶段 7 · 后台服务与主动行为 ✅（本轮）
-- 迁移 0006 proactive_state：频率/静默/暂停/最近活动/最近发送/下次候选持久化
-- 泊松调度：指数间隔 + 静默时段 + 最近活动抑制 + 过期不补发（睡眠/断网安全）
-- ProactiveService：候选生成、消息组合（人格 + 长期记忆）、有限重试、日志发送器
-- 后台循环随 API 生命周期运行（30s tick），WebUI 关闭不影响服务
-- 聊天用户消息自动记录最近活动；主动消息 API：status/config/pause/resume
-- WebUI 主动消息页从占位升级为真实配置页
-- launchd：plist 模板 + install/check 脚本；菜单栏状态入口 Swift 源码已编译验证
-- 110 passed / 4 skipped；真实服务 API 实测通过
-- 报告：`docs/reports/phase7-verification.md`
+### Stage 7 · Backend services and proactive behaviors ✅ (this round)
+- Migrate 0006 proactive_state: frequency/quiet/pause/recent activity/recently sent/next candidate persistence
+- Poisson scheduling: exponential interval + silent period + recent activity suppression + no reissue after expiration (sleep/disconnection safety)
+- ProactiveService: candidate generation, message combination (personality + long-term memory), limited retries, log sender
+- The background loop runs with the API life cycle (30s tick), and closing the WebUI does not affect the service.
+- Chat user messages automatically record recent activities; active message API: status/config/pause/resume
+- WebUI active message page is upgraded from placeholder to real configuration page
+- launchd: plist template + install/check script; menu bar status entry Swift source code has been compiled and verified
+- 110 passed / 4 skipped; real service API passed the actual test
+- Report: `docs/reports/phase7-verification.md`
 
-### 阶段 8 · QQ 私聊（OneBot Adapter）✅（本轮）
-- OneBot 11 私有消息事件/CQ 段解析；HTTP 事件接收 + OneBot API 发送
-- 所有者 QQ 白名单、message_id 幂等去重、按用户顺序处理锁、限频
-- 文字/图片（base64 与 URL 下载）/文件接收保存；回复按 4000 字符分片
-- QQ 内审批：`同意/拒绝 <编号>`，一次性编号不可重放，非 owner/群聊忽略
-- 渠道→会话映射（迁移 0007）：QQ 与 WebUI 共享会话/记忆/任务
-- 发送器失败有限重试；ProactiveSender 协议适配（阶段 8 起可用 QQ 主动消息）
-- 契约测试 8 个；真实 E2E：mock OneBot API + 真实 Ollama，事件→回复→send_private_msg
-- NapCat 真实部署完成：QQ 小号登录、HTTP 上报/发送网络配置、owner 白名单、
-  直发测试与模拟事件闭环实测均通过（`QQ LINK READY`）
-- 报告：`docs/reports/phase8-verification.md`
+### Stage 8 · QQ Private Chat (OneBot Adapter)✅ (this round)
+- OneBot 11 private message event/CQ segment parsing; HTTP event receiving + OneBot API sending
+- Owner QQ whitelist, message_id idempotent deduplication, lock processing in user order, frequency limiting
+- Text/image (base64 and URL download)/file receive and save; reply is divided into 4000 characters
+- Approval within QQ: `Agree/Reject <number>`, one-time number cannot be replayed, non-owner/group chat will ignore
+- Channel → Session Mapping (Migration 0007): QQ and WebUI share sessions/memories/tasks
+- Limited retry on sender failure; ProactiveSender protocol adaptation (QQ active messaging available from stage 8)
+- 8 contract tests; real E2E: mock OneBot API + real Ollama, event → reply → send_private_msg
+- NapCat real deployment completed: QQ account login, HTTP reporting/sending network configuration, owner whitelist,
+  Both the direct test and the simulated event closed-loop test passed (`QQ LINK READY`)
+- Report: `docs/reports/phase8-verification.md`
 
-### 阶段 9 · LoRA 人格固化 —— 用户决定暂缓（临时替代方案）
-- 离线工具链保持就绪（数据规范/校验/训练配置/盲测脚本）。
-- **用户指示**：先暂缓训练，用本地 `qwen3:8b` 文本模型 + SOUL.md 人格跑通最小验证。
-- 代码已切换默认 `model_name=qwen3:8b`、`model_supports_vision=false`；
-  图片消息会明确说明“临时文本模型暂不能看图”而不是误解析。
-- 待正式 LoRA：切回 `qwen3-vl:8b` + `model_supports_vision=true`，再训练/盲测。
+### Stage 9 · LoRA personality solidification - user decision to suspend (temporary alternative)
+- Offline tool chain remains ready (data specification/validation/training configuration/blind test script).
+- **User Instructions**: Suspend the training first and use the local `qwen3:8b` text model + SOUL.md personality run-through minimum verification.
+- The code has switched to the default `model_name=qwen3:8b`, `model_supports_vision=false`;
+  The picture message will clearly state that "the temporary text model cannot be viewed for the time being" instead of being misinterpreted.
+- To be official LoRA: switch back to `qwen3-vl:8b` + `model_supports_vision=true`, and then train/blind test again.
 
-### 阶段 10 · 发布加固 —— 核心完成 ✅，长时测试待用户
-- 加密备份/恢复：WNBK1 + PBKDF2 + Fernet；SQLite online backup + attachments；
-  verify/preview/restore（恢复前拒绝服务运行，自动安全备份与失败回滚）
-- 实测：临时库备份→预览→恢复替换；dev 库真实加密备份 9.9KB 且 verify/preview 通过
-- 诊断脚本 `scripts/diagnostics.py`（DB 完整性/迁移/磁盘/Provider/待审批/日志）
-- 日志落盘 `data/logs/whitenight.log`（写入脱敏）+ `/api/v1/logs` + WebUI 日志页
-- 负载冒烟 `scripts/load_smoke.sh`；72h 巡检 `scripts/run_72h.py`（待用户执行）
-- 安全红队补充：提示注入不改变规则、web.fetch SSRF 防护、evals/security 黄金集
-- 性能冒烟（会话/上下文/检索/路由宽松阈值）与 `scripts/e2e_smoke.py`
-  （dummy 与 real-ollama 两种模式均通过）
+### Phase 10 · Release reinforcement - core completed ✅, long-term testing awaiting users
+- Encrypted backup/restore: WNBK1 + PBKDF2 + Fernet; SQLite online backup + attachments;
+  verify/preview/restore (denial of service operation before recovery, automatic safe backup and failure rollback)
+- Actual measurement: temporary library backup → preview → restore and replace; the real encrypted backup of the dev library is 9.9KB and verify/preview passes
+- Diagnostic script `scripts/diagnostics.py` (DB Integrity/Migration/Disk/Provider/Pending Approval/Log)
+- Log storage `data/logs/whitenight.log` (write desensitization) + `/api/v1/logs` + WebUI log page
+- Load smoke `scripts/load_smoke.sh`; 72h inspection `scripts/run_72h.py` (to be executed by the user)
+- Security red team supplement: prompt injection does not change the rules, web.fetch SSRF protection, evals/security golden set
+- Performance smoke (session/context/retrieval/route relaxed thresholds) with `scripts/e2e_smoke.py`
+  (Both dummy and real-ollama modes pass)
 - `docs/INSTALL.md`、`docs/OPERATIONS.md`、`docs/RELEASE_CHECKLIST.md`
-- 132 passed / 4 skipped（含备份恢复、日志 API、安全红队、性能）
-- 报告：`docs/reports/phase10-verification.md`（随提交补齐）
+- 132 passed / 4 skipped (including backup and recovery, log API, security red team, performance)
+- Report: `docs/reports/phase10-verification.md` (completed with submission)
 
-## 未完成（按构建计划阶段）
+## Not completed (by build plan stage)
 
-| 阶段 | 内容 | 状态 |
+| Stage | Content | Status |
 |---|---|---|
-| 5 | 结构化路由、Hermes/Codex Adapter、任务/进度/审批/中止事件、升级重试 | ✅ 核心完成 |
-| 6 | 完整 WebUI（记忆/任务/审批/权限/模型/规则页面） | ✅ 核心完成（主动/日志/备份为诚实占位） |
-| 7 | launchd 后台服务、泊松主动消息调度 | ✅ 核心完成（真实发送器 QQ 在阶段 8） |
-| 8 | QQ 私聊（OneBot Adapter + NapCat） | ✅ 完成（真实 QQ 链路已实测） |
-| 9 | LoRA 人格固化 | ⚠️ 离线工具链就绪；训练需 GPU + 用户盲测 |
-| 10 | 发布加固（72h、备份恢复演练、文档） | ✅ 核心完成；72h/盲测待用户 |
+| 5 | Structured routing, Hermes/Codex Adapter, task/progress/approval/abort events, upgrade retries | ✅ Core completed |
+| 6 | Complete WebUI (memory/task/approval/permission/model/rules page) | ✅ Core completed (active/log/backup for honest placeholders) |
+| 7 | launchd background service, Poisson active message scheduling | ✅ Core completed (real sender QQ in stage 8) |
+| 8 | QQ private chat (OneBot Adapter + NapCat) | ✅ Completed (real QQ link has been tested) |
+| 9 | LoRA personality solidification | ⚠️ Offline tool chain ready; training requires GPU + user blind test |
+| 10 | Release reinforcement (72h, backup and recovery drill, documentation) | ✅ Core completed; 72h/blind test waiting for users |
 
-阶段内已知缺口：
-- 聊天模型 tool_calls 与 ToolExecutor 的接线（属阶段 5）
-- 备份/恢复界面与加密备份实现（计划阶段 4 提及，核心放在阶段 10，界面在阶段 6）
-- 旧版 .doc/.xls/.ppt 受控转换器（解析器已给出明确错误路径）
-- 语义召回默认关闭：`embedding_model` 为空时只有 FTS5 词法，自然语言问句需要先配小型嵌入模型
+Known gaps within the stage:
+- Wiring between chat model tool_calls and ToolExecutor (belongs to stage 5)
+- Backup/restore interface and encrypted backup implementation (mentioned in planning phase 4, core in phase 10, interface in phase 6)
+- Legacy .doc/.xls/.ppt controlled converter (the parser has given an explicit error path)
+- Semantic recall is turned off by default: when `embedding_model` is empty, there is only FTS5 lexicon. Natural language questions need to be equipped with a small embedding model first.
 
-## 问题记录
+## Problem record
 
-14. ✅ **QQ 文件/图片下载失败（2026-08-19）**：下载请求错误继承桌面代理，且未跟随
-    NapCat 常见重定向；现已固定直连、跟随重定向、流式限制 16 MiB，并按响应类型识别图片 MIME。
-15. ✅ **云端模型支持（2026-08-19）**：新增 OpenAI-compatible Provider。默认仍为本地 Ollama；
-    选择 `model_provider: openai` 后，API Key 仅从 macOS Keychain account `openai_api_key` 读取。
+14. ✅ **QQ file/picture download failed (2026-08-19)**: The download request error inherited the desktop agent and was not followed
+NapCat common redirects; now fixed direct connect, follow redirects, streaming limit of 16 MiB, and image MIME awareness by response type.
+15. ✅ **Cloud model support (2026-08-19)**: Added OpenAI-compatible Provider. The default is still local Ollama;
+After selecting `model_provider: openai`, the API Key is only read from the macOS Keychain account `openai_api_key`.
 
-1. **GitHub push 被拒/不稳定**：OAuth 凭据缺 `workflow` scope（主要阻塞），且直连
-   间歇性 HTTP2 framing 错误/超时。本地提交与 tag 完好。
-   修复：`gh auth refresh -s workflow && git push -u origin main`；网络错误时重试。
-2. **Hermes 任务级验证被阻塞**：Hermes 未登录任何模型 Provider（`hermes status` 全 ✗）。
-   需用户执行 `hermes model` / `hermes auth` 登录后跑任务链路契约烟测。
-3. **cua-driver TCC 待授权**：`hermes computer-use doctor` 显示辅助功能与屏幕录制未授予；
-   需用户在系统设置授权或运行 `hermes computer-use permissions grant`。
-4. ✅ **NapCat / QQ（2026-08-15 已解决）**：安装器「未安装」的根因是 App Management
-   TCC 未授权导致 root `cp` 被拒；用户授权后入口注入成功。QQ 小号已扫码登录，
-   NapCat HTTP 客户端（上报 8765）与 HTTP 服务端（3000 发送）均已配置，
-   WhiteNight owner 白名单已写入本地配置，真实 QQ 收发闭环实测通过。
-5. **真实 file.delete / screen.capture 未做系统级烟测**：分别需要 Finder 自动化与屏幕录制
-   权限；单元/集成测试已用受控 fake 覆盖状态机与审计。
-6. **DuckDuckGo HTML 端点 202 反爬**：已用 DDG Lite + Bing 兜底解决并实测，但上游可能继续
-   变化，升级需跑 `tests/test_web_tools.py` 与真实搜索烟测。
-7. **OCR 可选依赖未进 check.sh**：`ocrmac` 依赖 pyobjc（macOS only），CI 不装；本地验证
-   需 `uv sync --extra ocr`，否则 OCR 测试自动跳过。
-8. **SQLite 时间戳 naive/aware 混用**：已用统一 naive-UTC 比较修复（审批/衰减），后续新增
-   时间比较必须复用同一约定，防止 `TypeError`。
-9. **Hermes submit 契约未锁定**：Gateway 认证通过但未登录 Provider；Adapter 在未登录时
-   快速失败（已实测 `DelegateUnavailableError`）。用户登录后需完成真实任务链路契约测试，
-   再固化 submit 端点 payload。
-10. **Codex 真实任务未运行**：MCP 握手/工具列表实测通过；为避免消耗云端配额，编码任务
-    以 Fake Provider 做状态机测试。真实短任务烟测（如生成一个 hello.py）留待用户确认后执行。
-11. **WebUI 未做真实浏览器视觉回归**：已通过 tsc/eslint/build、Vite 代理全链路与 API 工作流
-    验证；窄窗口/键盘/无障碍需要用户在本机打开 `npm run dev` 做一次人工确认。
-12. ✅ **Ollama 失控生成导致 QQ 无回复（2026-08-15 已修复）**：两次“不理人”的
-    共同根因不是内存/Ollama 假死，而是模型退化循环：WhiteNight 调 `/api/chat` 未传
-    `num_predict`，Ollama 在 context-shift 下无限续写（日志实测 `n_decoded > 4000`），
-    占住单推理槽，后续消息全部排队；`ollama ps` 的 `Stopping...` 只是 keep_alive
-    到期的误导性显示。修复：`OllamaProvider` 默认 `max_output_tokens=2048` 并写入
-    `options.num_predict`（`src/whitenight/config.py` 可配 `model_max_output_tokens`），
-    新增 `tests/test_ollama_contract.py` 锁定 payload；136 passed / 4 skipped，真实 QQ
-    闭环自检通过。内存实测：16GB 空闲 27%、swap 用 2.4GB，属有压力但非根因。
-    遗留监测缺口：72h 巡检只测 `/healthz`，仍无法区分“能出词但停不下来”；后续可加
-    低频真实生成烟测（待用户确认）。
-13. ✅ **Git 误提交本地配置备份（2026-08-15 已处理）**：`git add -A` 误把
-    `config/whitenight.bak-*`（含 owner QQ 号）提交进 `3f44227`；已移入废纸篓、
-    加入 `.gitignore` 并在 `ae4b6e4` 移除。仓库为私有；如需彻底从历史清除需用户
-    确认后重写历史。后续提交只用 `git add <具体文件>`，不用 `git add -A`。
+1. **GitHub push rejected/unstable**: OAuth credentials lack `workflow` scope (mainly blocking), and direct connection
+   Intermittent HTTP2 framing errors/timeouts. Local commits and tags are intact.
+   Fix: `gh auth refresh -s workflow && git push -u origin main`; retry on network error.
+2. **Hermes task-level verification is blocked**: Hermes is not logged in to any model Provider (`hermes status` full ✗).
+   The user is required to execute `hermes model` / `hermes auth` and log in to run the task link contract smoke test.
+3. **cua-driver TCC pending authorization**: `hermes computer-use doctor` display accessibility and screen recording are not granted;
+   The user needs to set authorization in the system or run `hermes computer-use permissions grant`.
+4. ✅ **NapCat / QQ (resolved on 2026-08-15)**: The root cause of the installer "not installed" is App Management
+   Unauthorized TCC causes root `cp` to be rejected; entry injection is successful after user authorization. QQ account has scanned the QR code to log in.
+   The NapCat HTTP client (reported 8765) and HTTP server (3000 sent) have been configured.
+   The WhiteNight owner whitelist has been written into the local configuration, and the real QQ sending and receiving closed-loop test passed.
+5. **Real file.delete / screen.capture has not been tested at the system level**: Finder automation and screen recording are required respectively.
+   Permissions; unit/integration tests have state machines and audits covered with controlled fakes.
+6. **DuckDuckGo HTML endpoint 202 anti-crawl**: It has been solved and tested using DDG Lite + Bing, but the upstream may continue
+   Changes and upgrades require running `tests/test_web_tools.py` and real search smoke testing.
+7. **OCR optional dependency is not included in check.sh**: `ocrmac` depends on pyobjc (macOS only), CI is not installed; local verification
+   `uv sync --extra ocr` is required, otherwise the OCR test will be automatically skipped.
+8. **SQLite timestamp naive/aware mixed use**: Has been repaired (approval/attenuation) with unified naive-UTC comparison, and will be added later
+   Time comparisons must reuse the same convention to prevent `TypeError`.
+9. **Hermes submit contract is not locked**: Gateway authentication is passed but the Provider is not logged in; the Adapter is not logged in
+   Fail fast (tested `DelegateUnavailableError`). After logging in, the user needs to complete the real task link contract test.
+   Then solidify the submit endpoint payload.
+10. **Codex real task is not running**: MCP handshake/tool list passed the actual test; to avoid consuming cloud quota, the coding task
+Use Fake Provider for state machine testing. Real short task smoke testing (such as generating a hello.py) is left to be executed after user confirmation.
+11. **WebUI has not made a visual return to the real browser**: Passed tsc/eslint/build, Vite agent full link and API workflow
+Verification; Narrow window/keyboard/accessibility requires the user to open `npm run dev` on the local machine for manual confirmation.
+12. ✅ **Ollama was generated out of control resulting in no reply on QQ (fixed on 2026-08-15)**: "Ignore people" twice
+The common root cause is not memory/Ollama suspended animation, but the model degradation cycle: WhiteNight tune `/api/chat` not passed
+`num_predict`, Ollama continues writing indefinitely under context-shift (log measurement `n_decoded > 4000`),
+Occupying a single inference slot, all subsequent messages are queued; `Stopping...` of `ollama ps` is just keep_alive
+Misleading display of expiration. Fix: `OllamaProvider` defaults to `max_output_tokens=2048` and writes
+`options.num_predict` (`src/whitenight/config.py` can be configured with `model_max_output_tokens`),
+Added `tests/test_ollama_contract.py` to lock payload; 136 passed / 4 skipped, real QQ
+Closed-loop self-test passed. Actual memory measurement: 16GB is 27% free and 2.4GB is used for swap, which is stressful but not the root cause.
+Remaining monitoring gap: 72h inspection only tests `/healthz`, and still cannot distinguish between "can say words but cannot stop"; it can be added later
+Really generate smoke test at low frequency (to be confirmed by user).
+13. ✅ **Git mistakenly submitted local configuration backup (processed on 2026-08-15)**: `git add -A` mistakenly submitted
+`config/whitenight.bak-*` (including owner QQ number) was submitted to `3f44227`; has been moved to the trash,
+Added in `.gitignore` and removed in `ae4b6e4`. The warehouse is private; if you want to completely clear it from history, you need to
+Rewrite history after confirmation. For subsequent submissions, only use `git add <specific file>` instead of `git add -A`.
 
-## 下一步（收尾清单）
+## Next step (closing list)
 
-1. ✅ 72 小时运行已由 Agent 启动（`run_72h.py`，进行中）；真实睡眠唤醒与网络中断测试可由用户择机进行。
-2. 用户在开发机打开 WebUI 做视觉回归与窄窗口确认（headless 截图已生成）。
-3. ✅ NapCat 安装、QQ 扫码、真实 QQ 收发链路已完成（2026-08-15）。
-4. 用户登录 Hermes Provider，跑真实任务链路契约测试。
-5. 用户确认租用 GPU 计划，完成 LoRA 训练与盲测并选择默认模型。
-6. ✅ GitHub push 已完成（`gh` 凭据 + `git push origin main` 均正常）。
+1. ✅ The 72-hour run has been started by the Agent (`run_72h.py`, in progress); real sleep wake-up and network interruption tests can be carried out by the user at his/her choice.
+2. The user opens WebUI on the development machine to do visual regression and narrow window confirmation (headless screenshots have been generated).
+3. ✅ NapCat installation, QQ code scanning, and real QQ sending and receiving links have been completed (2026-08-15).
+4. The user logs in to Hermes Provider and runs the real task link contract test.
+5. The user confirms the GPU rental plan, completes LoRA training and blind testing and selects the default model.
+6. ✅ GitHub push completed (`gh` credentials + `git push origin main` are normal).
 
-## 验证命令
+## Verification command
 
 ```bash
-./scripts/check.sh                        # ruff + pytest + 前端 lint/build
-uv run mypy src/whitenight                 # 严格类型检查
+./scripts/check.sh # ruff + pytest + front-end lint/build
+uv run mypy src/whitenight # Strict type checking
 WHITENIGHT_TEST_OLLAMA=1 uv run pytest tests/test_ollama_provider.py -q
-uv run alembic upgrade head                # 数据库迁移
+uv run alembic upgrade head # Database migration
 uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
 ```

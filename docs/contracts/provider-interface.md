@@ -1,39 +1,39 @@
-# Provider 接口契约（v0.1 草案）
+# Provider interface contract (v0.1 draft)
 
-所有外部服务都必须位于 Provider 接口之后，可独立替换。阶段 0 只定义边界，
-阶段 1 高风险能力验证完成后，用实测报告锁定每个接口的版本与具体语义。
+All external services must be behind the Provider interface and can be replaced independently. Phase 0 only defines boundaries,
+After the high-risk capability verification in Phase 1 is completed, use the actual test report to lock the version and specific semantics of each interface.
 
 ## ModelProvider
 
-- `complete(messages, images, tools) -> AsyncIterator[ModelEvent]`：流式文本/工具调用事件；
-- `health() -> ModelHealth`：延迟、显存、模型列表；
-- 实现：Ollama（阶段 1 验证 `qwen3-vl:8b`）与 OpenAI-compatible Chat Completions；
-  云端凭据只从 Keychain 读取，默认仍使用本地 Ollama。
+- `complete(messages, images, tools) -> AsyncIterator[ModelEvent]`: streaming text/tool call event;
+- `health() -> ModelHealth`: delay, video memory, model list;
+- Implementation: Ollama (Phase 1 validation `qwen3-vl:8b`) with OpenAI-compatible Chat Completions;
+  Cloud credentials are only read from Keychain, still using local Ollama by default.
 
 ## SearchProvider
 
-- `search(query) -> list[SearchResult]`：`{title, url, snippet, retrieved_at}`，保留来源；
-- `fetch(url) -> FetchedPage`：页面提取，返回内容必须带来源标记，内容视为不可信输入。
+- `search(query) -> list[SearchResult]`: `{title, url, snippet, retrieved_at}`, retain the source;
+- `fetch(url) -> FetchedPage`: Page extraction, the returned content must have a source tag, and the content is regarded as untrusted input.
 
 ## EmbeddingProvider
 
-- `embed(texts) -> list[float]` 与 `health()`；按需加载，避免与 8B 模型争抢内存。
+- `embed(texts) -> list[float]` and `health()`; load on demand to avoid competing for memory with the 8B model.
 
-## DelegateProvider（Hermes / Codex 的公共契约）
+## DelegateProvider (public contract for Hermes/Codex)
 
 - `create_session(scope, cwd) -> SessionHandle`；
-- `submit(task_pack) -> AsyncIterator[TaskEvent]`：进度、审批、产物、错误、中止；
+- `submit(task_pack) -> AsyncIterator[TaskEvent]`: progress, approval, product, error, abort;
 - `abort(session, task)`；
-- `resume(thread_id)`（Codex 可恢复线程，Hermes 会话续接）。
-- 适配器不得解析执行器终端文本作为状态来源；升级只修改对应适配器。
+- `resume(thread_id)` (Codex resumable thread, Hermes session continuation).
+- Adapters must not parse actuator terminal text as a source of status; upgrades only modify the corresponding adapter.
 
 ## ChannelProvider（Web / OneBot）
 
-- `inbound -> NormalizedMessage`：统一消息 `{sender, channel, kind, text, images, files, quote}`；
+- `inbound -> NormalizedMessage`: Unified message `{sender, channel, kind, text, images, files, quote}`;
 - `outbound(NormalizedReply)`；
-- 渠道只负责传输与格式，不持有模型、记忆、权限或人格状态。
+- Channels are only responsible for transmission and formatting, and do not hold models, memories, permissions or personality states.
 
-## 版本纪律
+## Version discipline
 
-- 阶段 1 完成后，每个运行依赖记录：版本、提交哈希、许可证、兼容性结论；
-- 上游升级必须通过契约测试后才能更新 `uv.lock` / `package-lock.json`。
+- After phase 1 is completed, each running dependency record: version, commit hash, license, compatibility conclusion;
+- Upstream upgrades must pass contract testing before updating `uv.lock` / `package-lock.json`.

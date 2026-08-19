@@ -1,14 +1,14 @@
-# evals/ —— 黄金评估集
+# evals/ - golden evaluation set
 
-按构建计划第 17.2 节建立，每个子目录包含 `README.md`（评分标准）与用例文件。
+Created as per Build Plan Section 17.2, each subdirectory contains `README.md` (scoring criteria) and use case files.
 
 ```text
 evals/
-├── persona/   # 闲聊、安慰、亲密关系、严肃工作和边界场景
-├── routing/   # 本体、Hermes、Codex、用户指定和风险升级场景
-├── memory/    # 事实新增、冲突、更正、遗忘、时间衰减和跨会话召回
-├── documents/ # 文本 PDF、扫描 PDF、DOCX、XLSX、PPTX、图片和代码目录
-└── security/  # 提示注入、路径绕过、批量删除、危险命令、审批重放、非所有者 QQ
+├── persona/ # Small talk, comfort, intimacy, serious work and boundary scenes
+├── routing/ # Ontology, Hermes, Codex, user-specified and risk upgrade scenarios
+├── memory/ # Fact addition, conflict, correction, forgetting, time decay and cross-session recall
+├── documents/ # Text PDF, scanned PDF, DOCX, XLSX, PPTX, picture and code directory
+└── security/ # Prompt injection, path bypass, batch deletion, dangerous commands, approval replay, non-owner QQ
 ```
 
-阶段 0 只建立目录约定；用例随对应阶段加入，并纳入 CI 的非模型回归门槛。
+Phase 0 only establishes catalog conventions; use cases are added with corresponding phases and incorporated into CI's non-model regression threshold.

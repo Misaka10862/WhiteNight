@@ -1,55 +1,55 @@
-# 阶段 5 路由与 Agent 委派 实测报告（2026-08-15）
+# Phase 5 routing and agent delegation actual test report (2026-08-15)
 
-> 复跑：`uv run pytest`（97 passed, 4 skipped）
-> 阶段 5 退出条件：黄金路由集达到目标准确率；Hermes/Codex 故障不破坏主会话且可安全重试。
+>Rerun: `uv run pytest` (97 passed, 4 skipped)
+> Phase 5 exit conditions: The golden routing set reaches the target accuracy; Hermes/Codex failure does not destroy the main session and can be safely retried.
 
-## 1. 路由
+## 1. Routing
 
-- `RuleRouter`：规则优先、高精度。顺序：用户指定 → 图片问答 → 编码规则 →
-  GUI/跨应用 → 记忆 → 搜索 → 文件操作 → 默认本地陪伴。
-- `RoutingEngine`：规则 → 可选 `OllamaRoutingRouter`（严格 JSON）→ 本地兜底；
-  显式 `user_override` 在权限允许范围内服从。
-- 黄金集 `evals/routing/golden.jsonl`（16 例）：
-  companionship/image_qa/memory/search/file_op/gui/code/user-override 全覆盖，
-  **准确率 ≥ 0.9 达标**（测试断言）。
+- `RuleRouter`: Rule priority, high precision. Sequence: User specified → Image Q&A → Encoding rules →
+  GUI/Cross-Application → Memory → Search → File Operations → Default Local Companion.
+- `RoutingEngine`: rules → optional `OllamaRoutingRouter` (strict JSON) → local cover;
+  Explicit `user_override` is obeyed within permissions.
+- Golden set `evals/routing/golden.jsonl` (16 examples):
+  companionship/image_qa/memory/search/file_op/gui/code/user-override full coverage,
+  **Accuracy ≥ 0.9 meets the standard** (test assertion).
 
-## 2. 委派协议与适配器
+## 2. Delegation protocol and adapter
 
-- `DelegateEvent` 标准信封：queued/started/progress/approval_required/artifact/
-  result/error/aborted；`DelegateProvider` 协议统一 Hermes 与 Codex。
-- **Codex MCP Adapter（实测通过）**：
-  - stdio JSON-RPC 客户端（initialize → tools/list → tools/call）；
-  - `codex`（新会话，cwd/sandbox=workspace-write/approval-policy=on-request）
-    与 `codex-reply`（threadId 续接）；
-  - 真实握手测试 `WHITENIGHT_TEST_CODEX_MCP=1` → 2 passed，工具列表为
+- `DelegateEvent` standard envelope: queued/started/progress/approval_required/artifact/
+  result/error/aborted; `DelegateProvider` protocol unifies Hermes and Codex.
+- **Codex MCP Adapter (passed the actual test)**:
+  - stdio JSON-RPC client (initialize → tools/list → tools/call);
+  - `codex` (new session, cwd/sandbox=workspace-write/approval-policy=on-request)
+with `codex-reply`(threadId continued);
+  - Real handshake test `WHITENIGHT_TEST_CODEX_MCP=1` → 2 passed, the tool list is
     `codex` + `codex-reply`；
-  - 超时/进程退出转为 `DelegateError`，可安全重试。
-- **Hermes Gateway Adapter（实测通过）**：
-  - `/api/status` 健康检查成功（v0.17.0）；
-  - `/api/auth/me` 401/403 → `DelegateUnavailableError`（实测触发），
-    submit 契约在用户登录 Provider 后锁定，避免猜测协议产生副作用。
+  - Timeout/process exit turns into `DelegateError`, safe to retry.
+- **Hermes Gateway Adapter (passed the actual test)**:
+  - `/api/status` health check successful (v0.17.0);
+  - `/api/auth/me` 401/403 → `DelegateUnavailableError` (measured trigger),
+The submit contract is locked after the user logs into the Provider to avoid side effects from guessing the protocol.
 
-## 3. 任务管理
+## 3. Task management
 
-- 迁移 `0005 agent_tasks`：执行者/类别/状态/风险/thread_id/产物/错误/尝试次数。
-- `DelegateManager`：运行/重试（失败有限重试并产生 progress 事件）/中止/
-  不可用快速失败；终态持久化。
-- 任务 API：`GET /api/v1/tasks`、`GET /api/v1/tasks/{id}`、
+- Migrate `0005 agent_tasks`: executor/category/status/risk/thread_id/product/error/attempts.
+- `DelegateManager`: run/retry (limited retry on failure and generate progress event)/abort/
+  Unavailable. Fail fast; final state is persistent.
+- Task API: `GET /api/v1/tasks`, `GET /api/v1/tasks/{id}`,
   `POST /api/v1/tasks/{id}/abort`。
-- ChatService 集成：路由到 Codex/Hermes 时透传 `type:"task"` 事件；
-  结果原文落库并加一行人格化说明（技术内容不修改）；
-  **委派失败后同会话普通聊天继续可用（集成测试）**。
+- ChatService integration: transparently transmit `type:"task"` events when routing to Codex/Hermes;
+  As a result, the original text was saved and a line of personalized explanation was added (the technical content was not modified);
+  **Normal chat in the same session will continue to be available after delegation fails (integration test)**.
 
-## 4. 故障与恢复验证
+## 4. Failure and recovery verification
 
-- Fake Codex 成功：任务 `succeeded` 且 thread_id 持久化。
-- Flaky Provider：第 1 次失败 → 第 2 次成功，`attempts=2`。
-- Unavailable：快速失败为 error 事件，主会话仍能本地聊天。
-- 中止：任务状态 → `aborted`。
+- Fake Codex successful: task `succeeded` and thread_id persisted.
+- Flaky Provider: 1st failure → 2nd success, `attempts=2`.
+- Unavailable: Fast failure is an error event, and the main session can still chat locally.
+- Aborted: task status → `aborted`.
 
-## 5. 边界（记录在 PROGRESS）
+## 5. Boundaries (documented in PROGRESS)
 
-- Hermes submit 端点契约需用户登录 Provider 后做实任务测试。
-- Codex 真实编码任务未运行（避免消耗配额），MCP 握手已实测。
-- 进度事件：Codex MCP 单次调用不提供流式部分内容，当前只有 started/result；
-  Hermes 契约锁定后应提供真实进度。不伪造未发生的步骤。
+- The Hermes submit endpoint contract requires users to log in to the Provider and perform actual task testing.
+- Codex real encoding tasks are not running (to avoid consuming quota), and the MCP handshake has been measured.
+- Progress event: A single call to Codex MCP does not provide streaming content, currently only started/result;
+  Hermes contracts should provide real progress once locked. Don’t fake steps that didn’t happen.

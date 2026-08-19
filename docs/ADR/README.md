@@ -1,9 +1,9 @@
-# 架构决策记录（ADR）
+# Architectural Decision Record (ADR)
 
-| 编号 | 标题 | 状态 | 日期 |
+| Number | Title | Status | Date |
 |---|---|---|---|
-| 0001 | 后端基线：Python 3.12 + FastAPI + uv | 已接受 | 2026-08-15 |
-| 0002 | 本地优先安全边界：本机监听、Keychain 与加密存储 | 已接受 | 2026-08-15 |
-| 0003 | 阶段 2 流式聊天使用 WebSocket，单请求单连接 | 已接受 | 2026-08-15 |
+| 0001 | Backend baseline: Python 3.12 + FastAPI + uv | Accepted | 2026-08-15 |
+| 0002 | Local-first security boundary: local listening, keychain and encrypted storage | Accepted | 2026-08-15 |
+| 0003 | Phase 2 streaming chat uses WebSocket, single request, single connection | Accepted | 2026-08-15 |
 
-新决策使用 `NNNN-短横线标题.md` 命名，记录背景、决策、后果与替代方案。
+New decisions are named using `NNNN-hash title.md` to record the background, decision, consequences and alternatives.
