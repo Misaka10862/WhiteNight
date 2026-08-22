@@ -3,9 +3,15 @@
 > This file is updated with each build: recording completed, incomplete, issues and next steps.
 > Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
-Last update: 2026-08-19 (Fixed QQ download failure; added OpenAI-compatible cloud Provider; MIT release audit)
+Last update: 2026-08-22 (Enabled parallel tool calls and confirmation-free trusted QQ file delivery)
 
 ## Current stage
+
+- **File tool loop repair (this round)**: provider-native tool calls from the same model turn now run
+  concurrently, with validated results returned in original call order. Trusted OneBot file delivery
+  no longer asks for a second confirmation; the server still binds the recipient and verifies the
+  canonical path, regular-file status, size limit and SHA-256 immediately before upload. Other
+  state-changing file operations keep their existing approval levels.
 
 - **Minimal Authentication Scheme (User Confirmation)**: LoRA training suspended; temporary use of native `qwen3:8b`
   Text model + SOUL.md presets the personality to pass the minimum verification; then the model with visual ability will be trained according to the formal plan.
@@ -142,6 +148,11 @@ Now `parse_segments` recognizes poke segments and injects explicit context "(The
 
 ### Stage 9 · LoRA personality solidification - user decision to suspend (temporary alternative)
 - Offline tool chain remains ready (data specification/validation/training configuration/blind test script).
+- A reproducible 600-sample candidate corpus is prepared locally: 550 general and 50 isolated
+  adult-consensual samples across all nine required categories. Corpus text remains Git-ignored;
+  the committed manifest contains only counts, provenance, license review, and review status.
+- Candidate validation accepts `reviewed=false`; the training gate rejects every sample until the
+  user records final acceptance. No candidate is currently training-ready.
 - **User Instructions**: Suspend the training first and use the local `qwen3:8b` text model + SOUL.md personality run-through minimum verification.
 - The code has switched to the default `model_name=qwen3:8b`, `model_supports_vision=false`;
   The picture message will clearly state that "the temporary text model cannot be viewed for the time being" instead of being misinterpreted.

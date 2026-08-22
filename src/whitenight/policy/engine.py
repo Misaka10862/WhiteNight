@@ -43,6 +43,7 @@ class PolicyEngine:
     DEFAULT_RULES: ClassVar[dict[str, RiskLevel]] = {
         "document.parse": RiskLevel.READ_ONLY,
         "file.read": RiskLevel.READ_ONLY,
+        "file.find": RiskLevel.READ_ONLY,
         "screen.capture": RiskLevel.READ_ONLY,
         "web.fetch": RiskLevel.READ_ONLY,
         "web.search": RiskLevel.READ_ONLY,
@@ -51,7 +52,13 @@ class PolicyEngine:
         "file.write": RiskLevel.MEDIUM,
         "file.move": RiskLevel.MEDIUM,
         "file.delete": RiskLevel.DELETE,
+        "channel.file.send": RiskLevel.MEDIUM,
         "file.batch_delete": RiskLevel.BATCH_DELETE,
+    }
+    DEFAULT_MODE_OVERRIDES: ClassVar[dict[str, ApprovalMode]] = {
+        # The trusted channel and recipient are supplied by the server, not the model. The
+        # send tool also fingerprints and revalidates the file immediately before upload.
+        "channel.file.send": ApprovalMode.AUTO,
     }
 
     def __init__(self, rules: dict[str, RiskLevel] | None = None) -> None:
@@ -75,7 +82,7 @@ class PolicyEngine:
                 risk=RiskLevel.HIGH,
                 reason=f"未知工具 {tool_name!r}，默认拒绝",
             )
-        mode = mode_for_risk(risk)
+        mode = self.DEFAULT_MODE_OVERRIDES.get(tool_name, mode_for_risk(risk))
         if mode is ApprovalMode.BLOCKED:
             return PolicyDecision(
                 allowed=False,

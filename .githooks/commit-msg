@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+message_file="$1"
+subject="$(head -n 1 "$message_file")"
+
+if python3 - "$subject" <<'PY'
+import re
+import sys
+
+raise SystemExit(0 if re.search(r"[\u3400-\u9fff]", sys.argv[1]) else 1)
+PY
+then
+  echo "Commit subjects must be English; CJK characters are not allowed:" >&2
+  echo "  $subject" >&2
+  exit 1
+fi

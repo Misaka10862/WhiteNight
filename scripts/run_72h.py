@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""72 小时持续运行巡检（阶段 10，非破坏性）。
+"""Run the non-destructive stage 10 stability monitor for 72 hours.
 
-每 60 秒检查一次 /healthz 与 /api/v1/status，记录异常到
-data/logs/stability-72h.jsonl。运行：
+Checks /healthz and /api/v1/status every 60 seconds and writes exceptions to
+data/logs/stability-72h.jsonl. Usage:
     WHITENIGHT_STABILITY_HOURS=72 uv run scripts/run_72h.py
 """
 
@@ -34,7 +34,7 @@ def main() -> int:
     deadline = time.time() + args.hours * 3600
     failures = 0
     checks = 0
-    print(f"72h 巡检开始：{args.hours}h，每 {args.interval}s；日志 {log_path}")
+    print(f"Stability monitor started: {args.hours}h every {args.interval}s; log: {log_path}")
     while time.time() < deadline:
         started = time.monotonic()
         try:
@@ -57,10 +57,12 @@ def main() -> int:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         print(json.dumps(record, ensure_ascii=False))
         if not ok:
-            print("服务不健康；继续巡检（launchd KeepAlive 会负责拉起）", flush=True)
+            print(
+                "Service unhealthy; monitoring continues while launchd handles restart.", flush=True
+            )
         time.sleep(args.interval)
 
-    print(f"72h 巡检结束：checks={checks}, failures={failures}")
+    print(f"Stability monitor finished: checks={checks}, failures={failures}")
     return 0 if failures == 0 else 1
 
 

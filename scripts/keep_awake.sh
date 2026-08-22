@@ -21,36 +21,36 @@ is_running() {
 
 start_keepawake() {
   if is_running; then
-    echo "保活已在运行（pid $(cat "$PIDFILE")）"
+    echo "Sleep prevention is already running (pid $(cat "$PIDFILE"))"
     return 0
   fi
   if [ "${2:-}" != "--force" ]; then
     if ! pmset -g batt 2>/dev/null | grep -q 'AC Power'; then
-      echo "当前是电池供电；保活会持续耗电。接上电源后重试，或用 start --force 强制启动。" >&2
+      echo "Running on battery; connect power or pass start --force to accept the drain." >&2
       exit 1
     fi
   fi
   mkdir -p "$ROOT/data/logs"
   nohup caffeinate -i -m -s >>"$LOG" 2>&1 &
   echo $! >"$PIDFILE"
-  echo "保活已启动（pid $(cat "$PIDFILE")）：防止系统睡眠。"
+  echo "Sleep prevention started (pid $(cat "$PIDFILE"))."
 }
 
 stop_keepawake() {
   if is_running; then
     kill "$(cat "$PIDFILE")" 2>/dev/null
     rm -f "$PIDFILE"
-    echo "保活已停止。"
+    echo "Sleep prevention stopped."
   else
-    echo "保活没有在运行。"
+    echo "Sleep prevention is not running."
   fi
 }
 
 status_keepawake() {
   if is_running; then
-    echo "保活运行中（pid $(cat "$PIDFILE")）；日志：$LOG"
+    echo "Sleep prevention is running (pid $(cat "$PIDFILE")); log: $LOG"
   else
-    echo "保活未运行；系统按正常策略休眠，睡眠期间 QQ 无法即时回复。"
+    echo "Sleep prevention is off; QQ cannot reply while macOS is asleep."
   fi
 }
 
@@ -59,7 +59,7 @@ case "$COMMAND" in
   stop) stop_keepawake ;;
   status) status_keepawake ;;
   *)
-    echo "用法：$0 {start|start --force|stop|status}" >&2
+    echo "Usage: $0 {start|start --force|stop|status}" >&2
     exit 2
     ;;
 esac

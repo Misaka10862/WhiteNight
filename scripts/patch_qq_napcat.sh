@@ -17,8 +17,8 @@ BAK="$PKG.bak"
 LOADER="$HOME/Library/Containers/com.tencent.qq/Data/Documents/napcat/loadNapCat.js"
 
 if [[ ! -f "$LOADER" ]]; then
-  echo "未找到 NapCat 加载器：$LOADER" >&2
-  echo "请先在 NapCat 安装器中完成下载/安装步骤。" >&2
+  echo "NapCat loader not found: $LOADER" >&2
+  echo "Complete the download/install step in the NapCat installer first." >&2
   exit 1
 fi
 
@@ -28,25 +28,25 @@ app, loader = sys.argv[1], sys.argv[2]
 print(os.path.relpath(loader, app))
 PY
 )"
-echo "当前 QQ package.json："
+echo "Current QQ package.json:"
 grep '"main"' "$PKG"
-echo "需要改为：$REL_MAIN"
+echo "Required entry point: $REL_MAIN"
 
 if [[ "${1:-}" == "--dry-run" ]]; then
-  echo "DRY RUN：未修改系统文件。运行 ./scripts/patch_qq_napcat.sh 实际执行。"
+  echo "DRY RUN: no system files changed. Run ./scripts/patch_qq_napcat.sh to apply."
   exit 0
 fi
 
 if [[ -f "$BAK" ]]; then
-  echo "备份已存在，跳过备份：$BAK"
+  echo "Backup already exists; skipping: $BAK"
 else
   if ! sudo cp "$PKG" "$BAK"; then
-    echo "备份失败。如果提示 Operation not permitted："
-    echo "请打开「系统设置 → 隐私与安全性 → App 管理」，添加并允许当前终端应用，"
-    echo "然后重新运行本脚本。"
+    echo "Backup failed. If macOS reports Operation not permitted:"
+    echo "open System Settings > Privacy & Security > App Management, allow this terminal,"
+    echo "then rerun this script."
     exit 1
   fi
-  echo "已备份：$BAK"
+  echo "Backup created: $BAK"
 fi
 
 TMP_JSON="$(mktemp -t napcat_package.json.XXXXXX)"
@@ -62,6 +62,6 @@ PY
 sudo cp "$TMP_JSON" "$PKG"
 rm -f "$TMP_JSON"
 
-echo "已写入。当前入口："
+echo "Updated. Current entry point:"
 grep '"main"' "$PKG"
-echo "完成。请完全退出 QQ，然后在 NapCat 安装器选择 NapCat 入口启动（或安装器里点启动 NapCat）。"
+echo "Done. Quit QQ fully, then launch it through the NapCat entry in the installer."

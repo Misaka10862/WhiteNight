@@ -18,6 +18,8 @@ def test_default_rules_and_unknown_tools() -> None:
     assert engine.evaluate("file.create").mode is ApprovalMode.SESSION
     assert engine.evaluate("file.write").mode is ApprovalMode.ONCE
     assert engine.evaluate("file.delete").mode is ApprovalMode.ONCE
+    assert engine.evaluate("channel.file.send").mode is ApprovalMode.AUTO
+    assert engine.evaluate("channel.file.send").risk is RiskLevel.MEDIUM
     unknown = engine.evaluate("evil.pwn")
     assert unknown.mode is ApprovalMode.BLOCKED
     assert not unknown.allowed

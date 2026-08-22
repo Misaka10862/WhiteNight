@@ -7,7 +7,13 @@ from collections.abc import AsyncIterator, Callable
 
 import httpx
 
-from whitenight.models.base import ModelChunk, ModelProviderError, ProviderMessage
+from whitenight.models.base import (
+    ModelChunk,
+    ModelProviderError,
+    ProviderMessage,
+    ToolCall,
+    ToolSpec,
+)
 
 
 class OpenAIProvider:
@@ -34,16 +40,51 @@ class OpenAIProvider:
             base_url=self.base_url, timeout=self.timeout, trust_env=False, transport=self._transport
         )
 
-    async def stream_chat(self, messages: list[ProviderMessage]) -> AsyncIterator[ModelChunk]:
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncIterator[ModelChunk]:
         key = self._api_key()
         if not key:
             raise ModelProviderError("OpenAI-compatible API Key 未配置，请先写入 Keychain")
-        payload = {
+        wire_messages: list[dict[str, object]] = []
+        for message in messages:
+            item: dict[str, object] = {"role": message.role, "content": message.content}
+            if message.tool_call_id:
+                item["tool_call_id"] = message.tool_call_id
+            if message.name:
+                item["name"] = message.name
+            if message.tool_calls:
+                item["tool_calls"] = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for call in message.tool_calls
+                ]
+            wire_messages.append(item)
+        payload: dict[str, object] = {
             "model": self.model,
-            "messages": [m.model_dump(exclude_defaults=True) for m in messages],
+            "messages": wire_messages,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ]
+            payload["parallel_tool_calls"] = True
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         async with (
             self._client() as client,
@@ -54,21 +95,42 @@ class OpenAIProvider:
                 raise ModelProviderError(
                     f"OpenAI-compatible API 返回 {response.status_code}: {body[:500]}"
                 )
+            calls: dict[int, dict[str, str]] = {}
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
                 raw = line[5:].strip()
                 if raw == "[DONE]":
-                    yield ModelChunk(done=True)
-                    return
+                    break
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                delta = ((data.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+                delta_payload = (data.get("choices") or [{}])[0].get("delta") or {}
+                delta = delta_payload.get("content") or ""
                 if delta:
                     yield ModelChunk(delta=delta)
-            yield ModelChunk(done=True)
+                for raw_call in delta_payload.get("tool_calls") or []:
+                    index = int(raw_call.get("index", 0))
+                    state = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    state["id"] += str(raw_call.get("id") or "")
+                    function = raw_call.get("function") or {}
+                    state["name"] += str(function.get("name") or "")
+                    state["arguments"] += str(function.get("arguments") or "")
+            parsed_calls: list[ToolCall] = []
+            for index, state in sorted(calls.items()):
+                try:
+                    arguments = json.loads(state["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
+                parsed_calls.append(
+                    ToolCall(
+                        id=state["id"] or f"openai-{index}",
+                        name=state["name"],
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                    )
+                )
+            yield ModelChunk(done=True, tool_calls=parsed_calls)
 
     async def health(self) -> dict[str, object]:
         return {

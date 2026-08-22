@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""WhiteNight 加密备份/恢复 CLI（阶段 10）。
+"""WhiteNight encrypted backup and restore CLI (stage 10).
 
-恢复密钥通过环境变量 WHITENIGHT_BACKUP_KEY 提供；也可 --passphrase。
-生成独立恢复密钥：
-    uv run scripts/backup.py generate-key   # 打印后请离线保存
-备份（服务运行中也可以，SQLite online backup）：
+Provide the recovery key through WHITENIGHT_BACKUP_KEY or --passphrase.
+Generate an independent recovery key:
+    uv run scripts/backup.py generate-key
+Create a backup using SQLite online backup:
     uv run scripts/backup.py backup --output data/backups/whitenight.bak
-验证/预览/恢复（恢复前请停止服务）：
+Verify, preview, or restore (stop the service before restoring):
     uv run scripts/backup.py verify --input <bak>
     uv run scripts/backup.py preview --input <bak>
     uv run scripts/backup.py restore --input <bak>
@@ -33,7 +33,7 @@ from whitenight.storage.backup import (
 def passphrase(args: argparse.Namespace) -> str:
     value = args.passphrase or os.environ.get("WHITENIGHT_BACKUP_KEY")
     if not value:
-        print("缺少恢复密钥：--passphrase 或 WHITENIGHT_BACKUP_KEY", file=sys.stderr)
+        print("Missing recovery key: use --passphrase or WHITENIGHT_BACKUP_KEY", file=sys.stderr)
         raise SystemExit(2)
     return value
 
@@ -60,7 +60,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "generate-key":
         print(generate_recovery_key())
-        print("请把恢复密钥保存在离线介质；本密钥独立于 Keychain 主密钥。", file=sys.stderr)
+        print("Store this recovery key offline; it is independent from Keychain.", file=sys.stderr)
         return 0
 
     settings = load_settings()

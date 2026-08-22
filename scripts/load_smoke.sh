@@ -7,7 +7,7 @@ BASE="${WHITENIGHT_URL:-http://127.0.0.1:8765}"
 ROUNDS="${ROUNDS:-30}"
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-curl -fsS --max-time 2 "$BASE/healthz" >/dev/null || { echo "服务未启动"; exit 1; }
+curl -fsS --max-time 2 "$BASE/healthz" >/dev/null || { echo "Service is not running"; exit 1; }
 
 uv run python - <<PY
 import httpx, time

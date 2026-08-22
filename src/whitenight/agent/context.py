@@ -57,6 +57,9 @@ def build_provider_messages(
         soul_text.rstrip()
         + _SAFETY_APPENDIX
         + f"\n\n当前时间：{(now or datetime.now()).isoformat(timespec='seconds')}\n"
+        + f"当前用户主目录：{Path.home().resolve()}\n"
+        + f"当前工作目录：{Path.cwd().resolve()}\n"
+        + "需要现实信息时必须调用可用工具，不得猜测文件路径或工具结果。\n"
     )
     remaining = max(0, budget_chars - len(system))
 

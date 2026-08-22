@@ -23,8 +23,8 @@ export interface MessageRecord {
   id: string
   session_id: string
   sequence: number
-  role: 'system' | 'user' | 'assistant'
-  kind: 'text' | 'image' | 'tool_result'
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  kind: 'text' | 'image' | 'tool_call' | 'tool_result'
   content: string
   image_data_url: string | null
   created_at: string
@@ -54,6 +54,15 @@ export type ChatEvent =
     }
   | { type: 'error'; message?: string | null }
   | { type: 'task'; extra?: { delegate_event?: DelegateEvent } }
+  | {
+      type: 'tool'
+      extra?: { tool_name?: string; status?: string; message?: string }
+    }
+  | {
+      type: 'approval'
+      text?: string | null
+      extra?: { approval_id?: string; approval_code?: string; tool_name?: string }
+    }
 
 export interface FactRecord {
   id: string
@@ -249,7 +258,13 @@ export const abortTask = (id: string) =>
 export const fetchPendingApprovals = () =>
   jsonFetch<PendingApproval[]>('/api/v1/approvals/pending')
 export const approveRequest = (code: string, sessionId?: string | null) =>
-  jsonFetch<{ ok: boolean; reason: string; scope: string }>(`/api/v1/approvals/${code}/approve`, {
+  jsonFetch<{
+    ok: boolean
+    reason: string
+    scope: string
+    execution_status?: string
+    message_id?: string | null
+  }>(`/api/v1/approvals/${code}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId ?? null }),

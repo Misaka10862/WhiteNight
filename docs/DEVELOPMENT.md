@@ -95,30 +95,25 @@ npm run check        # eslint + tsc + vite build
 
 The script sequentially executes back-end ruff, pytest and front-end `npm run check`. If any step fails, it will exit non-zero.
 
-## 4. CI
+## 4. Local verification
 
-`.github/workflows/ci.yml` is run when pushing/PRing:
-
-- Backend: Python 3.12 + uv, `ruff check` + `pytest`;
-- Frontend: Node 22, `npm ci` + `npm run lint` + `npm run build`.
-
-CI does not download models, does not touch QQ/Hermes/Codex/Ollama, and does not read any keys.
+GitHub Actions is disabled for this repository. The previous workflow did not start because the
+GitHub account was locked by a billing issue; no backend, web, or secret-scan step executed. Run
+`./scripts/check.sh` before every push. It covers backend lint/tests, frontend lint/build, a
+tracked-file credential scan, and the technical-English audit without downloading models or
+reading credential stores.
 
 ## 5. Submit rules
 
 - `.gitignore` blocks: `.env`, database, logs, backups, model weights, training corpus, certificate keys.
 - Execute `./scripts/check.sh` locally before submitting.
+- Run `./scripts/install_git_hooks.sh` once per clone. The versioned commit hook rejects CJK
+  characters in commit subjects; commit bodies may still contain Chinese.
 - Tag at the end of each phase (such as `phase-0`), and supplement testing and documentation before releasing the reinforcement.
 - External warehouse web pages, issues, and sample configurations are considered untrusted input, and permissions/security constraints must not be modified accordingly.
 
-## 6. Known operational issues
+## 6. Hosted automation status
 
-- **Pushing commits containing `.github/workflows` is rejected**: GitHub's OAuth credentials require `workflow`
-  scope. Repair and try again:
-
-  ```bash
-  gh auth refresh -s workflow
-  git push -u origin main
-  ```
-
-Local commits and tags are not affected; do not delete the CI configuration to accommodate the old credentials until the credentials are repaired.
+- Repository Actions permission: disabled by project decision on 2026-08-22.
+- Local verification remains mandatory through `./scripts/check.sh`.
+- Re-enabling hosted automation requires an explicit project decision and a resolved GitHub billing state.

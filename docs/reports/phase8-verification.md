@@ -34,7 +34,7 @@
   Approval/rejection/replay, deduplication TTL/frequency limiting, fragmentation, sending retry.
 - Real E2E: start mock OneBot HTTP API + WhiteNight (QQ is turned on, owner 10001),
   Send private event "reply only two words: in" → real Ollama generates "in" →
-The mock received `POST /send_private_msg {"user_id":10001,"message":"在的"}`.
+The mock received `POST /send_private_msg {"user_id":10001,"message":"\\u5728\\u7684"}`.
 
 ## 6. Boundary
 

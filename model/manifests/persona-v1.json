@@ -1,0 +1,74 @@
+{
+  "version": "persona-v1-candidate",
+  "created_at": "2026-08-22",
+  "sample_count": 600,
+  "reviewed_count": 0,
+  "training_ready": false,
+  "corpus_files": [
+    "model/data/candidates/general.jsonl",
+    "model/data/candidates/adult.jsonl"
+  ],
+  "category_distribution": {
+    "chat": 100,
+    "coquetry": 70,
+    "comfort": 80,
+    "correction": 40,
+    "delegation": 60,
+    "progress": 50,
+    "relationship": 40,
+    "romance": 100,
+    "serious": 60
+  },
+  "content_rating_distribution": {
+    "adult": 50,
+    "general": 550
+  },
+  "sources": [
+    {
+      "name": "WhiteNight project-authored synthetic corpus",
+      "version": "persona-v1",
+      "url": null,
+      "license": "CC0-1.0",
+      "status": "included",
+      "notes": "Deterministically generated candidates; no external corpus text copied."
+    },
+    {
+      "name": "OpenAssistant Conversations (OASST1)",
+      "version": "fdf72ae0827c1cda404aff25b6603abec9e3399b",
+      "url": "https://huggingface.co/datasets/OpenAssistant/oasst1",
+      "license": "Apache-2.0",
+      "status": "researched-not-ingested",
+      "notes": "Chinese coverage exists; future adaptation requires per-sample quality and privacy review."
+    },
+    {
+      "name": "EmpatheticDialogues",
+      "version": "9e2bcd65bc66b458e226f0eda6808bf7d831b3e0",
+      "url": "https://huggingface.co/datasets/facebook/empathetic_dialogues",
+      "license": "CC-BY-NC-4.0",
+      "status": "excluded",
+      "notes": "Non-commercial restriction conflicts with the default corpus policy."
+    },
+    {
+      "name": "DailyDialog",
+      "version": "ffde34acefcd956529c39c4fc78d993b5b7f7520",
+      "url": "https://huggingface.co/datasets/li2017dailydialog/daily_dialog",
+      "license": "CC-BY-NC-SA-4.0",
+      "status": "excluded",
+      "notes": "Non-commercial and share-alike restrictions conflict with the default corpus policy."
+    },
+    {
+      "name": "Unverified social-platform dialogue corpora",
+      "version": null,
+      "url": null,
+      "license": "unknown",
+      "status": "excluded",
+      "notes": "Scraped dialogue and unclear participant rights are not accepted."
+    }
+  ],
+  "adult_policy": {
+    "isolated": true,
+    "allowed_categories": ["romance", "relationship"],
+    "required_tags": ["adults", "consensual"],
+    "requires_user_final_review": true
+  }
+}

@@ -7,20 +7,33 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import logging
 from collections.abc import AsyncGenerator
 
 from whitenight.agent.context import build_provider_messages, load_soul
-from whitenight.channels.types import ChatEvent, ChatRequest, MessageKind, MessageRecord
+from whitenight.channels.types import (
+    ChannelContext,
+    ChatEvent,
+    ChatRequest,
+    MessageKind,
+    MessageRecord,
+)
 from whitenight.config import Settings
 from whitenight.delegates.manager import DelegateManager
 from whitenight.memory.service import MemoryService
-from whitenight.models.base import ModelChunk, ModelProvider, ProviderMessage
+from whitenight.models.base import ModelChunk, ModelProvider, ProviderMessage, ToolCall, ToolSpec
+from whitenight.policy.approvals import ApprovalService
+from whitenight.policy.engine import ApprovalMode, PolicyEngine
 from whitenight.routing.engine import RoutingEngine
 from whitenight.routing.models import ExecutorChoice
 from whitenight.scheduler.service import ProactiveService
 from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
+from whitenight.tools.base import FileDeliveryProvider, ToolRegistry
+from whitenight.tools.executor import ExecutionOutcome, ToolExecutor
+from whitenight.tools.pending import PendingToolStore, params_digest
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +50,12 @@ class ChatService:
         router: RoutingEngine | None = None,
         delegate_manager: DelegateManager | None = None,
         proactive_service: ProactiveService | None = None,
+        tool_registry: ToolRegistry | None = None,
+        tool_executor: ToolExecutor | None = None,
+        approvals: ApprovalService | None = None,
+        pending_tools: PendingToolStore | None = None,
+        policy: PolicyEngine | None = None,
+        file_delivery: FileDeliveryProvider | None = None,
     ) -> None:
         self._store = store
         self._provider = provider
@@ -45,6 +64,12 @@ class ChatService:
         self._router = router or RoutingEngine()
         self._delegates = delegate_manager
         self._proactive = proactive_service
+        self._tools = tool_registry
+        self._tool_executor = tool_executor
+        self._approvals = approvals
+        self._pending_tools = pending_tools
+        self._policy = policy
+        self._file_delivery = file_delivery
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._extract_delay_s = 15.0
         self._extract_task: asyncio.Task[None] | None = None
@@ -53,9 +78,12 @@ class ChatService:
     def provider(self) -> ModelProvider:
         return self._provider
 
-    async def stream_reply(self, request: ChatRequest) -> AsyncGenerator[ChatEvent, None]:
+    async def stream_reply(
+        self, request: ChatRequest, channel_context: ChannelContext | None = None
+    ) -> AsyncGenerator[ChatEvent, None]:
         """处理一条用户消息并流式产生事件；完整回复才落库为 assistant 消息。"""
         session_id = request.session_id
+        trusted_channel = channel_context or ChannelContext()
         try:
             self._store.get_session(session_id)
         except SessionNotFoundError:
@@ -91,6 +119,21 @@ class ChatService:
             self._proactive.mark_activity()
         yield ChatEvent(type="start", session_id=session_id)
 
+        plan = await self._router.route(request.text, has_image=image_path is not None)
+        if (
+            plan.executor in {ExecutorChoice.HERMES, ExecutorChoice.CODEX}
+            and self._delegates is not None
+        ):
+            async for event in self._delegate_reply(
+                session_id,
+                request.text,
+                plan,
+                trusted_channel,
+                request.image_data_url,
+            ):
+                yield event
+            return
+
         if image_path is not None and not self._settings.model_supports_vision:
             reply = (
                 "主人，现在临时使用文本模型（qwen3:8b），暂时看不了图片。"
@@ -106,15 +149,6 @@ class ChatService:
             )
             return
 
-        plan = await self._router.route(request.text, has_image=image_path is not None)
-        if (
-            plan.executor in {ExecutorChoice.HERMES, ExecutorChoice.CODEX}
-            and self._delegates is not None
-        ):
-            async for event in self._delegate_reply(session_id, request.text, plan):
-                yield event
-            return
-
         try:
             history = self._store.list_messages(session_id)
             messages = build_provider_messages(
@@ -123,12 +157,145 @@ class ChatService:
                 self._settings.context_budget_chars,
             )
             text_parts: list[str] = []
-            async for chunk in self._provider.stream_chat(messages):
-                if chunk.delta:
-                    text_parts.append(chunk.delta)
-                    yield ChatEvent(type="chunk", delta=chunk.delta)
-                if chunk.done:
+            seen_calls: set[str] = set()
+            supports_tools = "tools" in inspect.signature(self._provider.stream_chat).parameters
+            tool_specs = (
+                self._tools.specs(
+                    None
+                    if trusted_channel.channel == "onebot"
+                    else set(self._tools.names()) - {"channel.file.send"}
+                )
+                if self._tools and self._tool_executor and supports_tools
+                else None
+            )
+            for _round in range(8):
+                turn_parts: list[str] = []
+                calls = []
+                stream = (
+                    self._provider.stream_chat(messages, tool_specs)
+                    if tool_specs is not None
+                    else self._provider.stream_chat(messages)
+                )
+                async for chunk in stream:
+                    if chunk.delta:
+                        turn_parts.append(chunk.delta)
+                        text_parts.append(chunk.delta)
+                        yield ChatEvent(type="chunk", delta=chunk.delta)
+                    if chunk.tool_calls:
+                        calls.extend(chunk.tool_calls)
+                    if chunk.done:
+                        break
+
+                if not calls:
                     break
+                call_keys = [
+                    json.dumps(
+                        {"name": call.name, "arguments": call.arguments},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    for call in calls
+                ]
+                if len(call_keys) != len(set(call_keys)) or any(
+                    key in seen_calls for key in call_keys
+                ):
+                    raise RuntimeError("模型重复调用同一工具和参数")
+                seen_calls.update(call_keys)
+                messages.append(
+                    ProviderMessage(
+                        role="assistant",
+                        content="".join(turn_parts),
+                        tool_calls=calls,
+                    )
+                )
+                assert self._tool_executor is not None
+                outcomes = await asyncio.gather(
+                    *(
+                        asyncio.to_thread(
+                            self._tool_executor.execute,
+                            call.name,
+                            call.arguments,
+                            session_id=session_id,
+                            channel=trusted_channel.channel,
+                            channel_target=trusted_channel.target,
+                            file_delivery=self._file_delivery,
+                            data_dir=str(self._settings.data_dir),
+                        )
+                        for call in calls
+                    )
+                )
+                waiting: list[tuple[ToolCall, ExecutionOutcome]] = []
+                for call, outcome in zip(calls, outcomes, strict=True):
+                    yield ChatEvent(
+                        type="tool",
+                        session_id=session_id,
+                        extra={
+                            "tool_name": call.name,
+                            "status": outcome.status,
+                            "message": outcome.message,
+                        },
+                    )
+                    if outcome.status == "waiting_approval":
+                        waiting.append((call, outcome))
+                    else:
+                        messages.append(
+                            ProviderMessage(
+                                role="tool",
+                                name=call.name,
+                                tool_call_id=call.id,
+                                content=json.dumps(
+                                    self._tool_result_payload(outcome), ensure_ascii=False
+                                ),
+                            )
+                        )
+                if waiting:
+                    approval_lines: list[str] = []
+                    for call, outcome in waiting:
+                        if outcome.approval_id is None or self._pending_tools is None:
+                            raise RuntimeError("审批调用缺少可恢复状态存储")
+                        prepared_params = outcome.metadata.get("prepared_params")
+                        pending_params = (
+                            prepared_params if isinstance(prepared_params, dict) else call.arguments
+                        )
+                        self._pending_tools.create(
+                            approval_id=outcome.approval_id,
+                            session_id=session_id,
+                            channel=trusted_channel.channel,
+                            channel_target=trusted_channel.target,
+                            tool_call_id=call.id,
+                            tool_name=call.name,
+                            params=pending_params,
+                            assistant_content="".join(turn_parts),
+                        )
+                        approval_lines.append(
+                            f"操作 {call.name} 需要审批。审批编号：{outcome.approval_code}。"
+                        )
+                    approval_text = "\n".join(approval_lines)
+                    reply = "".join(text_parts).strip()
+                    reply = f"{reply}\n\n{approval_text}".strip()
+                    assistant_message = self._persist_assistant(session_id, reply)
+                    for call, outcome in waiting:
+                        yield ChatEvent(
+                            type="approval",
+                            session_id=session_id,
+                            message_id=assistant_message.id,
+                            text=approval_text,
+                            extra={
+                                "approval_id": outcome.approval_id,
+                                "approval_code": outcome.approval_code,
+                                "tool_name": call.name,
+                            },
+                        )
+                    yield ChatEvent(
+                        type="done",
+                        session_id=session_id,
+                        message_id=assistant_message.id,
+                        text=reply,
+                        extra={"user_message_id": user_message.id},
+                    )
+                    return
+            else:
+                raise RuntimeError("工具调用超过 8 轮，已安全终止")
         except Exception as exc:  # Provider/存储异常：不伪造回复，原样报告
             logger.exception("聊天流式生成失败 session=%s", session_id)
             yield ChatEvent(type="error", message=f"模型调用失败：{exc}")
@@ -148,8 +315,282 @@ class ChatService:
             extra={"user_message_id": user_message.id},
         )
 
+    async def resume_approval(self, code: str, channel_context: ChannelContext) -> list[ChatEvent]:
+        """Approve, consume and continue a previously suspended tool call."""
+        if not all((self._pending_tools, self._approvals, self._policy, self._tool_executor)):
+            return [ChatEvent(type="error", message="审批恢复服务未配置")]
+        assert self._pending_tools is not None
+        assert self._approvals is not None
+        assert self._policy is not None
+        assert self._tool_executor is not None
+        pending = self._pending_tools.get_by_code(code)
+        if pending is None or pending.status != "pending":
+            return [ChatEvent(type="error", message="审批编号无效、已处理或无法恢复")]
+        if pending.channel != channel_context.channel or (
+            pending.channel_target and pending.channel_target != channel_context.target
+        ):
+            return [ChatEvent(type="error", message="审批编号不属于当前渠道或接收人")]
+        if params_digest(pending.params) != pending.params_digest:
+            self._pending_tools.update(pending.id, "failed", error="参数摘要不匹配")
+            return [ChatEvent(type="error", message="待执行参数校验失败")]
+
+        decision = self._policy.evaluate(pending.tool_name)
+        expected_scope = "session" if decision.mode is ApprovalMode.SESSION else "once"
+        resolution = self._approvals.approve(
+            code,
+            session_id=pending.session_id,
+            expected_scope=expected_scope,
+        )
+        if not resolution.ok:
+            return [ChatEvent(type="error", message=resolution.reason)]
+        outcome = await asyncio.to_thread(
+            self._tool_executor.execute,
+            pending.tool_name,
+            pending.params,
+            session_id=pending.session_id,
+            channel=pending.channel,
+            channel_target=pending.channel_target,
+            file_delivery=self._file_delivery,
+            approval_id=pending.approval_id,
+            data_dir=str(self._settings.data_dir),
+        )
+        result_payload = self._tool_result_payload(outcome)
+        self._pending_tools.update(
+            pending.id,
+            "succeeded" if outcome.status == "ok" else "failed",
+            result=result_payload,
+            error=None if outcome.status == "ok" else outcome.message,
+        )
+
+        history = self._store.list_messages(pending.session_id)
+        messages = build_provider_messages(
+            history,
+            load_soul(self._settings.soul_file),
+            self._settings.context_budget_chars,
+        )
+        from whitenight.models.base import ToolCall
+
+        messages.extend(
+            [
+                ProviderMessage(
+                    role="assistant",
+                    content=pending.assistant_content,
+                    tool_calls=[
+                        ToolCall(
+                            id=pending.tool_call_id,
+                            name=pending.tool_name,
+                            arguments=pending.params,
+                        )
+                    ],
+                ),
+                ProviderMessage(
+                    role="tool",
+                    name=pending.tool_name,
+                    tool_call_id=pending.tool_call_id,
+                    content=json.dumps(result_payload, ensure_ascii=False),
+                ),
+            ]
+        )
+        events = [
+            ChatEvent(
+                type="tool",
+                session_id=pending.session_id,
+                extra={
+                    "tool_name": pending.tool_name,
+                    "status": outcome.status,
+                    "message": outcome.message,
+                },
+            )
+        ]
+        events.extend(
+            [
+                event
+                async for event in self._continue_after_approval(
+                    pending.session_id, messages, channel_context
+                )
+            ]
+        )
+        return events
+
+    async def reject_approval(self, code: str, channel_context: ChannelContext) -> str:
+        if self._pending_tools is None or self._approvals is None:
+            return "审批恢复服务未配置"
+        pending = self._pending_tools.get_by_code(code)
+        if pending is None or pending.status != "pending":
+            return "审批编号无效、已处理或无法恢复"
+        if pending.channel != channel_context.channel or (
+            pending.channel_target and pending.channel_target != channel_context.target
+        ):
+            return "审批编号不属于当前渠道或接收人"
+        resolution = self._approvals.reject(code)
+        if resolution.ok:
+            self._pending_tools.update(pending.id, "rejected")
+            self._persist_assistant(pending.session_id, f"已拒绝操作 {pending.tool_name}。")
+        return resolution.reason
+
+    async def _continue_after_approval(
+        self,
+        session_id: str,
+        messages: list[ProviderMessage],
+        channel_context: ChannelContext,
+    ) -> AsyncGenerator[ChatEvent, None]:
+        text_parts: list[str] = []
+        seen_calls: set[str] = set()
+        supports_tools = "tools" in inspect.signature(self._provider.stream_chat).parameters
+        tool_specs = (
+            self._tools.specs(
+                None
+                if channel_context.channel == "onebot"
+                else set(self._tools.names()) - {"channel.file.send"}
+            )
+            if self._tools and supports_tools
+            else None
+        )
+        try:
+            for _round in range(8):
+                turn_parts: list[str] = []
+                calls = []
+                stream = (
+                    self._provider.stream_chat(messages, tool_specs)
+                    if tool_specs is not None
+                    else self._provider.stream_chat(messages)
+                )
+                async for chunk in stream:
+                    if chunk.delta:
+                        turn_parts.append(chunk.delta)
+                        text_parts.append(chunk.delta)
+                        yield ChatEvent(type="chunk", delta=chunk.delta)
+                    calls.extend(chunk.tool_calls)
+                    if chunk.done:
+                        break
+                if not calls:
+                    break
+                call_keys = [
+                    json.dumps(
+                        {"name": call.name, "arguments": call.arguments},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    for call in calls
+                ]
+                if len(call_keys) != len(set(call_keys)) or any(
+                    key in seen_calls for key in call_keys
+                ):
+                    raise RuntimeError("模型重复调用同一工具和参数")
+                seen_calls.update(call_keys)
+                messages.append(
+                    ProviderMessage(role="assistant", content="".join(turn_parts), tool_calls=calls)
+                )
+                assert self._tool_executor is not None
+                outcomes = await asyncio.gather(
+                    *(
+                        asyncio.to_thread(
+                            self._tool_executor.execute,
+                            call.name,
+                            call.arguments,
+                            session_id=session_id,
+                            channel=channel_context.channel,
+                            channel_target=channel_context.target,
+                            file_delivery=self._file_delivery,
+                            data_dir=str(self._settings.data_dir),
+                        )
+                        for call in calls
+                    )
+                )
+                waiting: list[tuple[ToolCall, ExecutionOutcome]] = []
+                for call, outcome in zip(calls, outcomes, strict=True):
+                    yield ChatEvent(
+                        type="tool",
+                        session_id=session_id,
+                        extra={
+                            "tool_name": call.name,
+                            "status": outcome.status,
+                            "message": outcome.message,
+                        },
+                    )
+                    if outcome.status == "waiting_approval":
+                        waiting.append((call, outcome))
+                    else:
+                        messages.append(
+                            ProviderMessage(
+                                role="tool",
+                                name=call.name,
+                                tool_call_id=call.id,
+                                content=json.dumps(
+                                    self._tool_result_payload(outcome), ensure_ascii=False
+                                ),
+                            )
+                        )
+                if waiting:
+                    approval_lines: list[str] = []
+                    for call, outcome in waiting:
+                        if outcome.approval_id is None or self._pending_tools is None:
+                            raise RuntimeError("审批调用缺少可恢复状态存储")
+                        prepared_params = outcome.metadata.get("prepared_params")
+                        pending_params = (
+                            prepared_params if isinstance(prepared_params, dict) else call.arguments
+                        )
+                        self._pending_tools.create(
+                            approval_id=outcome.approval_id,
+                            session_id=session_id,
+                            channel=channel_context.channel,
+                            channel_target=channel_context.target,
+                            tool_call_id=call.id,
+                            tool_name=call.name,
+                            params=pending_params,
+                            assistant_content="".join(turn_parts),
+                        )
+                        approval_lines.append(
+                            f"操作 {call.name} 需要审批。审批编号：{outcome.approval_code}。"
+                        )
+                    reply = (
+                        "".join(text_parts).strip() + "\n\n" + "\n".join(approval_lines)
+                    ).strip()
+                    message = self._persist_assistant(session_id, reply)
+                    for call, outcome in waiting:
+                        yield ChatEvent(
+                            type="approval",
+                            session_id=session_id,
+                            message_id=message.id,
+                            text=reply,
+                            extra={
+                                "approval_code": outcome.approval_code,
+                                "tool_name": call.name,
+                            },
+                        )
+                    yield ChatEvent(
+                        type="done", session_id=session_id, message_id=message.id, text=reply
+                    )
+                    return
+            else:
+                raise RuntimeError("工具调用超过 8 轮，已安全终止")
+        except Exception as exc:
+            logger.exception("审批后模型继续失败 session=%s", session_id)
+            yield ChatEvent(type="error", message=f"审批后继续失败：{exc}")
+            return
+        reply = "".join(text_parts).strip() or "操作已完成。"
+        message = self._persist_assistant(session_id, reply)
+        yield ChatEvent(type="done", session_id=session_id, message_id=message.id, text=reply)
+
+    @staticmethod
+    def _tool_result_payload(outcome: ExecutionOutcome) -> dict[str, object]:
+        return {
+            "ok": outcome.status == "ok",
+            "summary": outcome.message,
+            "content": outcome.result.content if outcome.result else "",
+            "sources": (
+                [source.model_dump() for source in outcome.result.sources] if outcome.result else []
+            ),
+            "metadata": outcome.result.metadata if outcome.result else {},
+        }
+
     async def _delegate_reply(
-        self, session_id: str, prompt: str, plan: object
+        self,
+        session_id: str,
+        prompt: str,
+        plan: object,
+        channel_context: ChannelContext,
+        image_data_url: str | None = None,
     ) -> AsyncGenerator[ChatEvent, None]:
         """把任务交给 Hermes/Codex，并把标准化事件透传给渠道。
 
@@ -170,6 +611,13 @@ class ChatService:
                 prompt=prompt,
                 session_id=session_id,
                 cwd=str(self._settings.data_dir.parent),
+                metadata={
+                    "risk": plan.risk.value,
+                    "whitenight_session_id": session_id,
+                    "channel": channel_context.channel,
+                    "channel_target": channel_context.target,
+                    "image_data_url": image_data_url,
+                },
             ):
                 task_id = event.task_id
                 yield ChatEvent(
@@ -255,9 +703,9 @@ class DummyProvider:
         self.reply = reply
 
     async def stream_chat(
-        self, messages: list[ProviderMessage]
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
     ) -> AsyncGenerator[ModelChunk, None]:
-        del messages
+        del messages, tools
         for char in self.reply:
             yield ModelChunk(delta=char)
         yield ModelChunk(done=True)
@@ -274,6 +722,12 @@ def create_chat_service(
     router: RoutingEngine | None = None,
     delegate_manager: DelegateManager | None = None,
     proactive_service: ProactiveService | None = None,
+    tool_registry: ToolRegistry | None = None,
+    tool_executor: ToolExecutor | None = None,
+    approvals: ApprovalService | None = None,
+    pending_tools: PendingToolStore | None = None,
+    policy: PolicyEngine | None = None,
+    file_delivery: FileDeliveryProvider | None = None,
 ) -> ChatService:
     """Provider 未配置或测试注入时降级为 DummyProvider（开发环境显式选择）。"""
     return ChatService(
@@ -284,4 +738,10 @@ def create_chat_service(
         router,
         delegate_manager,
         proactive_service,
+        tool_registry,
+        tool_executor,
+        approvals,
+        pending_tools,
+        policy,
+        file_delivery,
     )

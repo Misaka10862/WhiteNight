@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, get_type_hints
 
 from pydantic import BaseModel, Field
 
+from whitenight.models.base import ToolSpec
 from whitenight.policy.risk import RiskLevel
 
 
@@ -37,6 +38,13 @@ class ToolContext:
 
     data_dir: str
     actor: str = "whitenight"
+    channel: str | None = None
+    channel_target: str | None = None
+    file_delivery: FileDeliveryProvider | None = None
+
+
+class FileDeliveryProvider(Protocol):
+    def upload_file(self, target: str, path: str, name: str) -> None: ...
 
 
 class ToolParameters(BaseModel):
@@ -72,3 +80,27 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._tools)
+
+    def specs(self, names: set[str] | None = None) -> list[ToolSpec]:
+        """Return OpenAI-compatible schemas derived from each validate method."""
+        specs: list[ToolSpec] = []
+        for name, tool in sorted(self._tools.items()):
+            if names is not None and name not in names:
+                continue
+            model = get_type_hints(tool.validate).get("return")
+            if not isinstance(model, type) or not issubclass(model, ToolParameters):
+                raise TypeError(f"工具 {name} 的 validate 必须声明 ToolParameters 返回类型")
+            schema = model.model_json_schema()
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                for field_name in list(properties):
+                    if field_name.startswith("approved_"):
+                        properties.pop(field_name)
+            specs.append(
+                ToolSpec(
+                    name=name,
+                    description=tool.description,
+                    parameters=schema,
+                )
+            )
+        return specs

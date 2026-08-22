@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""阶段 1 高风险能力验证脚本（幂等、非破坏性）。
+"""Run idempotent, non-destructive stage 1 capability verification.
 
-检查项：
-  1. 本机环境（macOS/Apple Silicon、内存）
-  2. Ollama 服务与模型（qwen3-vl:8b / qwen3:8b）
-  3. Hermes：版本、Gateway 命令、computer-use 驱动与 TCC 状态
-  4. Codex：CLI、MCP Server、auth 文件存在性（不读取内容）
-  5. NapCat：安装探测（安装需要用户交互，本脚本只报告）
-  6. SQLCipher：可选依赖与加密读写原型（临时目录）
-  7. macOS Keychain：写入/读取/删除一次性探针条目（不存储真实凭据）
+Checks the local platform, Ollama/models, Hermes, Codex, NapCat installation,
+SQLCipher prototype, and a disposable macOS Keychain probe.
 
-用法：
-    uv run scripts/verify_phase1.py                # 基础探测
-    uv run scripts/verify_phase1.py --smoke-model  # 真实推理烟测（含首 token 延迟）
-    uv run scripts/verify_phase1.py --smoke-gateway # 启动 Hermes Gateway 烟测
+Usage:
+    uv run scripts/verify_phase1.py
+    uv run scripts/verify_phase1.py --smoke-model
+    uv run scripts/verify_phase1.py --smoke-gateway
 
-输出：data/reports/phase1-*.json + 终端摘要。报告不包含任何密钥。
+Writes a secret-free data/reports/phase1-*.json report and terminal summary.
 """
 
 from __future__ import annotations
@@ -85,28 +79,28 @@ def probe_ollama() -> CheckResult:
         response.raise_for_status()
         evidence["server_version"] = response.json().get("version")
     except Exception as exc:  # 探测脚本吞掉并报告
-        return CheckResult("ollama", "blocked", f"Ollama 服务不可达：{exc}", evidence)
+        return CheckResult("ollama", "blocked", f"Ollama service unavailable: {exc}", evidence)
 
     try:
         tags = CLIENT.get(f"{OLLAMA_BASE}/api/tags").json().get("models", [])
         evidence["models"] = [m["name"] for m in tags]
     except Exception as exc:
-        return CheckResult("ollama", "partial", f"无法列出模型：{exc}", evidence)
+        return CheckResult("ollama", "partial", f"Unable to list models: {exc}", evidence)
 
     present = {name: any(m["name"] == name for m in tags) for name in (MODEL_TEXT, MODEL_VL)}
     evidence["required_models"] = present
     if present[MODEL_VL]:
         status, detail = (
             "ok",
-            f"服务 {evidence['server_version']}；{MODEL_VL} 与 {MODEL_TEXT} 均就绪",
+            f"Server {evidence['server_version']}; {MODEL_VL} and {MODEL_TEXT} are ready",
         )
     elif present[MODEL_TEXT]:
         status, detail = (
             "partial",
-            f"服务 {evidence['server_version']}；仅 {MODEL_TEXT}，{MODEL_VL} 未下载",
+            f"Server {evidence['server_version']}; only {MODEL_TEXT} is ready; {MODEL_VL} is missing",
         )
     else:
-        status, detail = "blocked", "Ollama 服务可达但所需模型缺失"
+        status, detail = "blocked", "Ollama is reachable but required models are missing"
     return CheckResult("ollama", status, detail, evidence)
 
 
@@ -287,7 +281,7 @@ def probe_hermes() -> CheckResult:
     evidence: dict[str, Any] = {}
     code, version, err = run_cmd(["hermes", "--version"], timeout=30)
     if code != 0:
-        return CheckResult("hermes", "blocked", f"Hermes 不可用：{err}", evidence)
+        return CheckResult("hermes", "blocked", f"Hermes unavailable: {err}", evidence)
     evidence["version"] = version
     code, _, _ = run_cmd(["hermes", "serve", "--help"], timeout=30)
     evidence["gateway_command"] = code == 0
@@ -297,13 +291,14 @@ def probe_hermes() -> CheckResult:
         return CheckResult(
             "hermes",
             "partial",
-            f"v{version}；Gateway 命令{'可用' if evidence['gateway_command'] else '缺失'}；cua-driver 未安装",
+            f"v{version}; Gateway command "
+            f"{'available' if evidence['gateway_command'] else 'missing'}; cua-driver not installed",
             evidence,
         )
     return CheckResult(
         "hermes",
         "ok" if evidence["gateway_command"] else "partial",
-        f"v{version}；Gateway 命令可用；cua-driver：{status}",
+        f"v{version}; Gateway command available; cua-driver: {status}",
         evidence,
     )
 
@@ -338,7 +333,7 @@ def probe_napcat() -> CheckResult:
     return CheckResult(
         "napcat",
         "skipped" if not found else "ok",
-        "未安装（需要用户下载官方构建并扫码登录 QQ 小号）；OneBot 适配器接口不受阻"
+        "Not installed (official download and QR login required); OneBot adapter is not blocked"
         if not found
         else f"found at {found}",
         {"binary": found},
@@ -353,7 +348,7 @@ def probe_sqlcipher() -> CheckResult:
         return CheckResult(
             "sqlcipher",
             "skipped",
-            "可选依赖 sqlcipher3 未安装；运行 uv sync --extra sqlcipher",
+            "Optional sqlcipher3 dependency missing; run uv sync --extra sqlcipher",
             evidence,
         )
     evidence["driver"] = sqlcipher3.sqlite_version
@@ -393,7 +388,7 @@ def probe_sqlcipher() -> CheckResult:
     return CheckResult(
         "sqlcipher",
         status,
-        "加密读写原型验证完成" if status == "ok" else "验证未完全通过",
+        "Encrypted read/write prototype verified" if status == "ok" else "Verification incomplete",
         evidence,
     )
 
@@ -411,7 +406,7 @@ def probe_keychain() -> CheckResult:
         return CheckResult(
             "keychain",
             "ok" if read_back == dummy else "partial",
-            "macOS Keychain 写入/读取/删除探针完成",
+            "macOS Keychain write/read/delete probe completed",
             {"roundtrip": read_back == dummy, "service": service},
         )
     finally:
@@ -459,7 +454,9 @@ def probe_hermes_gateway() -> CheckResult:
             return CheckResult(
                 "hermes-gateway",
                 status,
-                "Gateway 进程启动并响应 HTTP" if reachable else "Gateway 未在限时内响应",
+                "Gateway started and responded over HTTP"
+                if reachable
+                else "Gateway did not respond before timeout",
                 evidence,
             )
         finally:
@@ -482,10 +479,12 @@ CHECKS = {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="WhiteNight 阶段 1 能力验证")
-    parser.add_argument("--smoke-model", action="store_true", help="真实推理烟测（文本 + 视觉）")
-    parser.add_argument("--smoke-gateway", action="store_true", help="启动 Hermes Gateway 烟测")
-    parser.add_argument("--json", action="store_true", help="仅输出 JSON")
+    parser = argparse.ArgumentParser(description="WhiteNight stage 1 capability verification")
+    parser.add_argument("--smoke-model", action="store_true", help="Run live text/vision inference")
+    parser.add_argument(
+        "--smoke-gateway", action="store_true", help="Start a Hermes Gateway smoke test"
+    )
+    parser.add_argument("--json", action="store_true", help="Print JSON only")
     args = parser.parse_args()
 
     results: list[dict[str, Any]] = []
@@ -493,7 +492,7 @@ def main() -> int:
         try:
             results.append(asdict(probe()))
         except Exception as exc:
-            results.append(asdict(CheckResult(name, "blocked", f"探测异常：{exc}")))
+            results.append(asdict(CheckResult(name, "blocked", f"Probe failed: {exc}")))
 
     if args.smoke_model:
         results.append(asdict(probe_ollama_smoke()))
@@ -511,7 +510,7 @@ def main() -> int:
     else:
         for item in results:
             print(f"[{item['status']:7}] {item['capability']}: {item['detail']}")
-        print(f"\n报告：{report_path}")
+        print(f"\nReport: {report_path}")
     return 0
 
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""等待 NapCat 启动并提醒用户（非破坏性）。
+"""Wait for NapCat and notify the user without changing configuration.
 
-用法：
+Usage:
     uv run scripts/wait_for_napcat.py --timeout 86400
-检测到 NapCat WebUI(6099) 或 OneBot(3000) 后，发送 macOS 通知，
-并把事件写入 data/logs/napcat-ready.jsonl。
+Sends a macOS notification after detecting the NapCat WebUI or OneBot endpoint
+and writes the event to data/logs/napcat-ready.jsonl.
 """
 
 from __future__ import annotations
@@ -58,15 +58,16 @@ def main() -> int:
                 [
                     "osascript",
                     "-e",
-                    'display notification "NapCat 已启动，可以扫码登录 QQ 小号了" with title "WhiteNight"',
+                    'display notification "NapCat is ready; scan the QR code to sign in" '
+                    'with title "WhiteNight"',
                 ],
                 check=False,
             )
-            print("NAP CAT READY — 请扫码登录 QQ 小号", flush=True)
+            print("NAPCAT READY - scan the QR code to sign in", flush=True)
             return 0
         time.sleep(args.interval)
 
-    print("等待超时：NapCat 未启动", flush=True)
+    print("Timed out waiting for NapCat", flush=True)
     return 1
 
 

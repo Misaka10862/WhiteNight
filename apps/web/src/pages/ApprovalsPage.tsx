@@ -7,11 +7,20 @@ export default function ApprovalsPage() {
   const approve = useMutation({
     mutationFn: (item: { code: string; sessionId: string | null }) =>
       approveRequest(item.code, item.sessionId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['approvals'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      queryClient.invalidateQueries({ queryKey: ['messages'] })
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
   })
   const reject = useMutation({
     mutationFn: rejectRequest,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['approvals'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      queryClient.invalidateQueries({ queryKey: ['messages'] })
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
+    },
   })
 
   return (

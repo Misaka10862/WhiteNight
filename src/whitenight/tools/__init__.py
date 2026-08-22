@@ -4,9 +4,11 @@ from whitenight.tools.base import Source, ToolContext, ToolRegistry, ToolResult
 from whitenight.tools.executor import ExecutionOutcome, ToolExecutor
 from whitenight.tools.files import (
     ArchiveListTool,
+    ChannelFileSendTool,
     DocumentParseTool,
     FileCreateTool,
     FileDeleteTool,
+    FileFindTool,
     FileMoveTool,
     FileReadTool,
     FileWriteTool,
@@ -16,10 +18,12 @@ from whitenight.tools.web import WebFetchTool, WebSearchTool
 
 __all__ = [
     "ArchiveListTool",
+    "ChannelFileSendTool",
     "DocumentParseTool",
     "ExecutionOutcome",
     "FileCreateTool",
     "FileDeleteTool",
+    "FileFindTool",
     "FileMoveTool",
     "FileReadTool",
     "FileWriteTool",

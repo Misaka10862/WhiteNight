@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     memory_extract_max_tokens: int = 512  # 记忆提取单独限长，避免占住唯一推理槽太久
     embedding_model: str = ""  # 为空则仅词法检索；小模型按需加载
     hermes_gateway_url: str = "http://127.0.0.1:9119"
+    hermes_managed: bool = True
+    hermes_command: str = "hermes"
+    hermes_provider: str = "deepseek"
+    hermes_model: str = "deepseek-v4-flash-vision-exp"
+    hermes_startup_timeout_s: float = 45.0
+    deepseek_api_key_account: str = "deepseek_api_key"
     codex_command: str = "codex"
     codex_timeout_s: float = 1800.0
 
@@ -79,6 +85,7 @@ class Settings(BaseSettings):
     qq_onebot_api_url: str = "http://127.0.0.1:3000"
     qq_rate_limit_seconds: float = 2.0
     qq_reply_max_chars: int = 4000
+    qq_file_send_max_bytes: int = 100 * 1024 * 1024
 
     def ensure_dirs(self) -> None:
         """创建运行时目录（数据、日志、备份）。"""

@@ -7,14 +7,27 @@
 
 from __future__ import annotations
 
+import getpass
+import sys
+
 import uvicorn
 
 from whitenight.api.app import create_app
 from whitenight.config import load_settings
+from whitenight.credentials.keychain import get_keychain
 
 
 def main() -> None:
     settings = load_settings()
+    if sys.argv[1:] == ["credentials", "set", "deepseek"]:
+        key = getpass.getpass("DeepSeek API Key: ").strip()
+        if not key:
+            raise SystemExit("未写入：Key 不能为空")
+        get_keychain(settings.keychain_backend).set(
+            settings.keychain_service, settings.deepseek_api_key_account, key
+        )
+        print("DeepSeek API Key 已写入 macOS Keychain")
+        return
     settings.ensure_dirs()
     app = create_app(settings)
     uvicorn.run(

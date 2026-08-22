@@ -1692,6 +1692,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -1729,6 +1730,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.41,<3" },
     { name = "sqlcipher3", marker = "extra == 'sqlcipher'", specifier = ">=0.6.2,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
+    { name = "websockets", specifier = "==17.0.1" },
 ]
 provides-extras = ["sqlcipher", "ocr"]
 

@@ -1,66 +1,73 @@
-# WhiteNight 运行时配置示例
+# WhiteNight runtime configuration example.
 
-# 复制为 config/whitenight.yaml 后按需修改。
-# 优先级：默认值 < 本文件 < WHITENIGHT_* 环境变量。
-# 不要把任何真实密钥写在这里——凭据只进入 macOS Keychain。
+# Copy to config/whitenight.yaml and edit locally.
+# Precedence: defaults < this file < WHITENIGHT_* environment variables.
+# Never store real secrets here; credentials belong in macOS Keychain.
 
 app_name: WhiteNight
 app_env: development        # development | test | production
 
-# 首版强制本机监听；修改为 0.0.0.0 会破坏安全边界，属已知风险操作。
+# The first release is localhost-only. Binding to 0.0.0.0 breaks that boundary.
 host: 127.0.0.1
 port: 8765
 
 log_level: INFO
-log_json: false             # 生产可改为 true，输出结构化 JSON 行
+log_json: false             # Set true for structured JSON logs in production.
 
 data_dir: data
 
-# 开发/测试：sqlite:///data/whitenight.db
-# 生产加密：sqlcipher:///data/whitenight.db（需 uv sync --extra sqlcipher）
+# Development/test: sqlite:///data/whitenight.db
+# Encrypted production: sqlcipher:///data/whitenight.db (requires the sqlcipher extra)
 database_url: sqlite:///data/whitenight.db
 
-keychain_backend: macos     # macos | memory（memory 仅限测试/CI）
+keychain_backend: macos     # macos | memory (memory is for tests only)
 keychain_service: com.whitenight.credentials
 
-# --- 模型与上下文 ---
-# 临时最小验证：文本模型 + SOUL.md 人格；LoRA 视觉模型完成后切回 qwen3-vl:8b
+# --- Model and context ---
+# Temporary baseline: text model + SOUL.md. Return to qwen3-vl after LoRA validation.
 model_name: qwen3:8b
 model_provider: ollama       # ollama | openai
 openai_base_url: https://api.openai.com/v1
 openai_api_key_account: openai_api_key
 openai_timeout_s: 120.0
-model_supports_vision: false   # 切回 qwen3-vl:8b 时改为 true
-model_max_output_tokens: 2048  # Ollama num_predict 上限，防止退化生成无限循环
-ollama_keep_alive: "-1"        # -1=常驻（内部转数字）；也可写 5m/1h；避免闲置后首条消息等待重新加载
+model_supports_vision: false   # Set true when returning to qwen3-vl:8b.
+model_max_output_tokens: 2048  # Ollama num_predict cap prevents runaway generation.
+ollama_keep_alive: "-1"        # -1 keeps the model loaded; durations such as 5m/1h also work.
 ollama_base_url: http://127.0.0.1:11434
 context_budget_chars: 12000
 max_image_bytes: 8388608    # 8 MiB
 soul_file: SOUL.md
 
-# 记忆提取：ollama（主回复后异步）| rules（规则回退）| none
+# Memory extraction: ollama (async after reply) | rules (fallback) | none
 memory_extractor: ollama
-memory_extract_max_tokens: 512  # 记忆提取输出上限，避免与聊天抢推理槽
-# 语义检索嵌入模型；为空只启用 FTS5 词法检索
+memory_extract_max_tokens: 512  # Limit extraction so it yields the inference slot to chat.
+# Empty means FTS5 lexical retrieval only.
 embedding_model: ""
 
-# 委派执行器（阶段 5）
+# Delegated executors (stage 5)
 hermes_gateway_url: http://127.0.0.1:9119
+hermes_managed: true
+hermes_command: hermes
+hermes_provider: deepseek
+hermes_model: deepseek-v4-flash-vision-exp
+hermes_startup_timeout_s: 45.0
+deepseek_api_key_account: deepseek_api_key
 codex_command: codex
 codex_timeout_s: 1800
 
-# 主动消息默认值（阶段 7，WebUI 可改并持久化）
+# Proactive-message defaults (stage 7; WebUI changes are persisted)
 proactive_enabled: false
 proactive_expected_per_day: 1.5
 proactive_quiet_start: "23:00"
 proactive_quiet_end: "08:00"
 proactive_suppress_minutes: 60
 proactive_skip_grace_minutes: 45
-proactive_sender: log           # log | none | qq（NapCat 配好后改为 qq）
+proactive_sender: log           # log | none | qq (select qq after NapCat setup)
 
-# QQ / OneBot（阶段 8；NapCat 登录需要用户操作）
+# QQ / OneBot (stage 8; NapCat login requires user interaction)
 qq_enabled: false
-qq_owner_ids: []                # 例：[10001]
+qq_owner_ids: []                # Example: [10001]
 qq_onebot_api_url: http://127.0.0.1:3000
 qq_rate_limit_seconds: 2.0
 qq_reply_max_chars: 4000
+qq_file_send_max_bytes: 104857600
