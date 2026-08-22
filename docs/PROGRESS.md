@@ -17,7 +17,9 @@ Last update: 2026-08-22 (Enabled parallel tool calls and confirmation-free trust
   orchestrator now enforces that contract: a file-delivery turn cannot finish until every file found
   in that turn has a successful `channel.file.send` result; if a small model only promises to send,
   the validated find results are completed through `ToolExecutor`. QQ `/clear` rotates to a fresh
-  context while retaining the old session for debugging and audit.
+  context while retaining the old session for debugging and audit. NapCat file delivery uses its
+  verified JSON + `base64://` contract so the QQ process never needs permission to read the original
+  Desktop path; client/business errors fail once instead of triggering duplicate uploads.
 
 - **Minimal Authentication Scheme (User Confirmation)**: LoRA training suspended; temporary use of native `qwen3:8b`
   Text model + SOUL.md presets the personality to pass the minimum verification; then the model with visual ability will be trained according to the formal plan.

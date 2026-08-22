@@ -148,6 +148,16 @@ class FakeDelivery:
         self.sent.append((target, path, name))
 
 
+class FailingDelivery:
+    def __init__(self) -> None:
+        self.attempts: list[str] = []
+
+    def upload_file(self, target: str, path: str, name: str) -> None:
+        del target, name
+        self.attempts.append(path)
+        raise RuntimeError("NapCat rejected upload")
+
+
 def _service(engine, settings, provider, tools, file_delivery=None):
     store = SessionStore(engine)
     approvals = ApprovalService(engine)
@@ -282,3 +292,32 @@ def test_file_delivery_goal_recovers_when_model_only_promises(engine, settings, 
     assert events[-1].type == "done"
     assert events[-1].text == "已发送 2 个文件。"
     assert "马上" not in store.list_messages(session.id)[-1].content
+
+
+def test_file_delivery_goal_stops_after_provider_failure(engine, settings, tmp_path):
+    for name in ("adult.jsonl", "general.jsonl"):
+        (tmp_path / name).write_text(name, encoding="utf-8")
+    delivery = FailingDelivery()
+    service, store, _ = _service(
+        engine,
+        settings,
+        StallingFileDeliveryProvider(tmp_path),
+        [FileFindTool(), ChannelFileSendTool()],
+        delivery,
+    )
+    session = store.create_session()
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="找到两个 jsonl 文件发给我"),
+                ChannelContext(channel="onebot", target="10001"),
+            )
+        ]
+
+    events = asyncio.run(run())
+    assert len(delivery.attempts) == 2
+    assert events[-1].type == "error"
+    assert events[-1].message and "文件发送失败" in events[-1].message
+    assert len(store.list_messages(session.id)) == 1

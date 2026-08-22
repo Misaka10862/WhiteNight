@@ -25,7 +25,8 @@
 ## 4. Transmitter
 
 - `OneBotSender`: `send_private_msg` (sharded by 4000 characters),
-  `upload_private_file` (multipart); limited retries on failure (3 times).
+  `upload_private_file` (JSON + `base64://`, avoiding macOS container path denial); limited retries
+  for transport/5xx failures, with 4xx and OneBot business errors failing immediately.
 - Implement the ProactiveSender protocol: active messages can be sent to QQ from stage 8 onwards.
 
 ## 5. Actual measurement
