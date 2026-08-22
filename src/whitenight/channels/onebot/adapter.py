@@ -105,6 +105,8 @@ class OneBotAdapter:
             event = OneBotPrivateMessageEvent.model_validate(payload)
         except ValidationError as exc:
             return {"status": "invalid_event", "error": str(exc)}
+        if event.post_type != "message":
+            return {"status": "ignored_post_type"}
         if event.message_type != "private":
             return {"status": "ignored_group"}
 
@@ -128,14 +130,19 @@ class OneBotAdapter:
 
     async def _process_owner_message(self, event: OneBotPrivateMessageEvent) -> dict[str, object]:
         parsed = parse_segments(event)
-        session_id = self._channel_sessions.get_or_create("onebot", str(event.user_id))
         logger.info(
-            "QQ 私聊处理 user_id=%s message_id=%s poke=%s text=%r",
+            "QQ 私聊处理 user_id=%s message_id=%s segments=%s poke=%s text=%r",
             event.user_id,
             event.message_id,
+            parsed.segments,
             parsed.is_poke,
             parsed.text[:50],
         )
+
+        if parsed.empty:
+            return {"status": "ignored_empty"}
+
+        session_id = self._channel_sessions.get_or_create("onebot", str(event.user_id))
 
         approval = await self._handle_approval_command(event, parsed.text, session_id)
         if approval is not None:

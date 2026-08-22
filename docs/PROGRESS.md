@@ -19,7 +19,9 @@ Last update: 2026-08-22 (Enabled parallel tool calls and confirmation-free trust
   the validated find results are completed through `ToolExecutor`. QQ `/clear` rotates to a fresh
   context while retaining the old session for debugging and audit. NapCat file delivery uses its
   verified JSON + `base64://` contract so the QQ process never needs permission to read the original
-  Desktop path; client/business errors fail once instead of triggering duplicate uploads.
+  Desktop path; client/business errors fail once instead of triggering duplicate uploads. OneBot
+  `message_sent` echoes and empty events are ignored, and the outbound-file tool is advertised and
+  executable only for a current request with explicit file-delivery intent, preventing history replay.
 
 - **Minimal Authentication Scheme (User Confirmation)**: LoRA training suspended; temporary use of native `qwen3:8b`
   Text model + SOUL.md presets the personality to pass the minimum verification; then the model with visual ability will be trained according to the formal plan.

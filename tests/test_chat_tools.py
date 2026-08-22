@@ -111,6 +111,7 @@ class StallingFileDeliveryProvider:
     async def stream_chat(
         self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
     ) -> AsyncGenerator[ModelChunk, None]:
+        assert tools and any(tool.name == "channel.file.send" for tool in tools)
         tool_messages = [message for message in messages if message.role == "tool"]
         sent = [message for message in tool_messages if message.name == "channel.file.send"]
         found = [message for message in tool_messages if message.name == "file.find"]
@@ -156,6 +157,27 @@ class FailingDelivery:
         del target, name
         self.attempts.append(path)
         raise RuntimeError("NapCat rejected upload")
+
+
+class UnauthorizedSendProvider:
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        del messages
+        assert tools and all(tool.name != "channel.file.send" for tool in tools)
+        yield ModelChunk(
+            done=True,
+            tool_calls=[
+                ToolCall(
+                    id="unauthorized-send",
+                    name="channel.file.send",
+                    arguments={"path": "/tmp/not-authorized.txt"},
+                )
+            ],
+        )
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
 
 
 def _service(engine, settings, provider, tools, file_delivery=None):
@@ -321,3 +343,29 @@ def test_file_delivery_goal_stops_after_provider_failure(engine, settings, tmp_p
     assert events[-1].type == "error"
     assert events[-1].message and "文件发送失败" in events[-1].message
     assert len(store.list_messages(session.id)) == 1
+
+
+def test_send_tool_cannot_run_without_current_delivery_intent(engine, settings):
+    delivery = FakeDelivery()
+    service, store, _ = _service(
+        engine,
+        settings,
+        UnauthorizedSendProvider(),
+        [FileReadTool(), ChannelFileSendTool()],
+        delivery,
+    )
+    session = store.create_session()
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="你好"),
+                ChannelContext(channel="onebot", target="10001"),
+            )
+        ]
+
+    events = asyncio.run(run())
+    assert delivery.sent == []
+    assert events[-1].type == "error"
+    assert events[-1].message and "未开放的工具" in events[-1].message

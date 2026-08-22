@@ -118,6 +118,21 @@ def test_non_owner_and_group_ignored(engine: Engine, settings: Settings) -> None
     assert sender.messages == []
 
 
+def test_sent_echo_and_empty_event_are_ignored(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+
+    sent_echo = _private(201, "outgoing echo")
+    sent_echo["post_type"] = "message_sent"
+    assert asyncio_run(adapter.handle_event(sent_echo))["status"] == "ignored_post_type"
+
+    empty = _private(202, "")
+    assert asyncio_run(adapter.handle_event(empty))["status"] == "ignored_empty"
+    assert sender.messages == []
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    assert sessions.list_sessions() == []
+
+
 def test_image_segment_is_understood(engine: Engine, settings: Settings) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)

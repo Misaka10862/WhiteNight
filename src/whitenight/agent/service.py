@@ -176,15 +176,15 @@ class ChatService:
             sent_paths: set[str] = set()
             fallback_attempted = False
             supports_tools = "tools" in inspect.signature(self._provider.stream_chat).parameters
+            enabled_tool_names = set(self._tools.names()) if self._tools else set()
+            if not file_delivery_required:
+                enabled_tool_names.discard("channel.file.send")
             tool_specs = (
-                self._tools.specs(
-                    None
-                    if trusted_channel.channel == "onebot"
-                    else set(self._tools.names()) - {"channel.file.send"}
-                )
+                self._tools.specs(enabled_tool_names)
                 if self._tools and self._tool_executor and supports_tools
                 else None
             )
+            advertised_tool_names = {spec.name for spec in tool_specs or []}
             for _round in range(8):
                 turn_parts: list[str] = []
                 calls = []
@@ -296,6 +296,13 @@ class ChatService:
                         )
                         continue
                     break
+                unavailable_calls = [
+                    call.name for call in calls if call.name not in advertised_tool_names
+                ]
+                if unavailable_calls:
+                    raise RuntimeError(
+                        "模型调用了当前请求未开放的工具：" + ", ".join(unavailable_calls)
+                    )
                 call_keys = [
                     json.dumps(
                         {"name": call.name, "arguments": call.arguments},
@@ -570,14 +577,11 @@ class ChatService:
         seen_calls: set[str] = set()
         supports_tools = "tools" in inspect.signature(self._provider.stream_chat).parameters
         tool_specs = (
-            self._tools.specs(
-                None
-                if channel_context.channel == "onebot"
-                else set(self._tools.names()) - {"channel.file.send"}
-            )
+            self._tools.specs(set(self._tools.names()) - {"channel.file.send"})
             if self._tools and supports_tools
             else None
         )
+        advertised_tool_names = {spec.name for spec in tool_specs or []}
         try:
             for _round in range(8):
                 turn_parts: list[str] = []
@@ -597,6 +601,13 @@ class ChatService:
                         break
                 if not calls:
                     break
+                unavailable_calls = [
+                    call.name for call in calls if call.name not in advertised_tool_names
+                ]
+                if unavailable_calls:
+                    raise RuntimeError(
+                        "模型调用了当前请求未开放的工具：" + ", ".join(unavailable_calls)
+                    )
                 call_keys = [
                     json.dumps(
                         {"name": call.name, "arguments": call.arguments},
