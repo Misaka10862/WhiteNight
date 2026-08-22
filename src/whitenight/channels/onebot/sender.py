@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -65,14 +65,13 @@ class OneBotSender:
 
     def upload_private_file(self, user_id: int, path: str | Path, name: str) -> None:
         path = Path(path)
-        if not path.exists():
+        if not path.is_file() or path.is_symlink():
             raise OneBotSendError(f"文件不存在：{path}")
-        with path.open("rb") as handle:
-            self._post(
-                "/upload_private_file",
-                data={"user_id": str(user_id), "name": name},
-                files={"file": (name, handle, "application/octet-stream")},
-            )
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        self._post(
+            "/upload_private_file",
+            json={"user_id": user_id, "file": f"base64://{encoded}", "name": name},
+        )
 
     def upload_file(self, target: str, path: str, name: str) -> None:
         try:
@@ -86,29 +85,35 @@ class OneBotSender:
         endpoint: str,
         *,
         json: dict[str, object] | None = None,
-        data: dict[str, str] | None = None,
-        files: dict[str, Any] | None = None,
     ) -> dict[str, object]:
         last_error = "unknown"
         for attempt in range(1, self.max_attempts + 1):
             try:
                 with self._client() as client:
-                    response = client.post(
-                        f"{self.api_url}{endpoint}",
-                        json=json,
-                        data=data,
-                        files=files,
-                    )
-                if response.status_code != 200:
-                    raise OneBotSendError(f"HTTP {response.status_code}")
-                payload = response.json()
-                if payload.get("retcode") not in (0, None):
-                    raise OneBotSendError(str(payload))
-                return dict(payload)
-            except Exception as exc:
+                    response = client.post(f"{self.api_url}{endpoint}", json=json)
+            except httpx.HTTPError as exc:
                 last_error = str(exc)
                 if attempt < self.max_attempts:
                     time.sleep(0.5 * attempt)
+                    continue
+                break
+
+            body = response.text[:1000]
+            if response.status_code >= 500:
+                last_error = f"HTTP {response.status_code}: {body}"
+                if attempt < self.max_attempts:
+                    time.sleep(0.5 * attempt)
+                    continue
+                break
+            if response.status_code != 200:
+                raise OneBotSendError(f"HTTP {response.status_code}: {body}")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise OneBotSendError("OneBot 返回了无效 JSON") from exc
+            if payload.get("retcode") not in (0, None) or payload.get("status") == "failed":
+                raise OneBotSendError(str(payload))
+            return dict(payload)
         raise OneBotSendError(last_error)
 
     def send(self, message: str, metadata: dict[str, object]) -> bool:

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import json
+
 import httpx
+import pytest
 from sqlalchemy import Engine
 
 from whitenight.agent.service import ChatService, DummyProvider
@@ -11,6 +15,7 @@ from whitenight.channels.onebot import (
     EventDeduplicator,
     OneBotAdapter,
     OneBotSender,
+    OneBotSendError,
     RateLimiter,
     split_text,
 )
@@ -229,6 +234,39 @@ def test_onebot_sender_retries(monkeypatch) -> None:
     sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler), max_attempts=2)
     assert sender.send_private_message(10001, "你好") == 1
     assert len(calls) == 2
+
+
+def test_upload_private_file_uses_base64_json(tmp_path) -> None:
+    source = tmp_path / "data.bin"
+    source.write_bytes(b"hello qq file")
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"status": "ok", "retcode": 0}, request=request)
+
+    sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler))
+    sender.upload_private_file(10001, source, "data.bin")
+
+    assert captured["user_id"] == 10001
+    assert captured["name"] == "data.bin"
+    encoded = str(captured["file"])
+    assert encoded.startswith("base64://")
+    assert base64.b64decode(encoded.removeprefix("base64://")) == b"hello qq file"
+
+
+def test_onebot_sender_does_not_retry_client_error() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, text="bad request", request=request)
+
+    sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler), max_attempts=3)
+    with pytest.raises(OneBotSendError, match="HTTP 400"):
+        sender.send_private_message(10001, "hello")
+    assert calls == 1
 
 
 def test_download_follows_redirects_without_proxy(monkeypatch) -> None:

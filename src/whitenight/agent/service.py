@@ -270,6 +270,17 @@ class ChatService:
                                         ),
                                     )
                                 )
+                            fallback_failures = [
+                                outcome.message
+                                for outcome in fallback_outcomes
+                                if outcome.status != "ok"
+                            ]
+                            if fallback_failures:
+                                yield ChatEvent(
+                                    type="error",
+                                    message="文件发送失败：" + "；".join(fallback_failures),
+                                )
+                                return
                             if self._file_delivery_complete(discovered_paths, sent_paths):
                                 break
                             continue
@@ -322,6 +333,7 @@ class ChatService:
                     )
                 )
                 waiting: list[tuple[ToolCall, ExecutionOutcome]] = []
+                file_send_failures: list[str] = []
                 for call, outcome in zip(calls, outcomes, strict=True):
                     yield ChatEvent(
                         type="tool",
@@ -336,6 +348,8 @@ class ChatService:
                         waiting.append((call, outcome))
                     else:
                         self._record_file_goal_result(call, outcome, discovered_paths, sent_paths)
+                        if call.name == "channel.file.send" and outcome.status != "ok":
+                            file_send_failures.append(outcome.message)
                         messages.append(
                             ProviderMessage(
                                 role="tool",
@@ -346,6 +360,12 @@ class ChatService:
                                 ),
                             )
                         )
+                if file_delivery_required and file_send_failures:
+                    yield ChatEvent(
+                        type="error",
+                        message="文件发送失败：" + "；".join(file_send_failures),
+                    )
+                    return
                 if waiting:
                     approval_lines: list[str] = []
                     for call, outcome in waiting:
