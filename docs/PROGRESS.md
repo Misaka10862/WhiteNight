@@ -11,7 +11,9 @@ Last update: 2026-08-22 (Enabled parallel tool calls and confirmation-free trust
   concurrently, with validated results returned in original call order. Trusted OneBot file delivery
   no longer asks for a second confirmation; the server still binds the recipient and verifies the
   canonical path, regular-file status, size limit and SHA-256 immediately before upload. Other
-  state-changing file operations keep their existing approval levels.
+  state-changing file operations keep their existing approval levels. The immutable system safety
+  appendix now also requires file intents and short follow-ups such as "send it" to complete through
+  real tool results, and forbids claiming success or future execution in place of a tool call.
 
 - **Minimal Authentication Scheme (User Confirmation)**: LoRA training suspended; temporary use of native `qwen3:8b`
   Text model + SOUL.md presets the personality to pass the minimum verification; then the model with visual ability will be trained according to the formal plan.

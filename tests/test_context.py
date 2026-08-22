@@ -39,6 +39,20 @@ def test_build_provider_messages_system_first_and_latest_user_kept() -> None:
     assert messages[-1].content == "主人现在的问题"
 
 
+def test_system_prompt_requires_real_file_tool_completion() -> None:
+    messages = build_provider_messages(
+        [_message("user", "找到两个文件直接发给我")],
+        "人格提示：尽量只用文字回答。",
+        10_000,
+    )
+    system = messages[0].content
+    assert "必须实际调用工具" in system
+    assert "发吧" in system and "继续最近尚未完成的文件任务" in system
+    assert "多个互不依赖的文件可以并行调用工具" in system
+    assert "只有对应工具结果明确返回成功后" in system
+    assert "不得编造路径、结果或成功状态" in system
+
+
 def test_build_provider_messages_keeps_history_inside_budget() -> None:
     history = [
         _message("user", "第一条"),
