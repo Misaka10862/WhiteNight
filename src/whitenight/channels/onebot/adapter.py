@@ -141,6 +141,21 @@ class OneBotAdapter:
         if approval is not None:
             return approval
 
+        if parsed.text.strip().lower() == "/clear":
+            previous_id, new_session_id = self._channel_sessions.reset("onebot", str(event.user_id))
+            logger.info(
+                "QQ 上下文已重置 user_id=%s previous_session=%s new_session=%s",
+                event.user_id,
+                previous_id,
+                new_session_id,
+            )
+            await self._send(event.user_id, "上下文窗口已清空，旧会话记录仍保留。")
+            return {
+                "status": "context_reset",
+                "previous_session_id": previous_id,
+                "session_id": new_session_id,
+            }
+
         if parsed.file_path and not parsed.image_data_url:
             saved = await self._save_qq_file(event.user_id, parsed.file_path, parsed.file_name)
             if saved:

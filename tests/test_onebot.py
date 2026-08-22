@@ -76,6 +76,30 @@ def test_text_message_replies_and_shared_session(engine: Engine, settings: Setti
     assert len(sender.messages) == before
 
 
+def test_clear_rotates_context_without_deleting_history(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    first = asyncio_run(adapter.handle_event(_private(101, "旧上下文")))
+    old_session_id = str(first["session_id"])
+
+    cleared = asyncio_run(adapter.handle_event(_private(102, "/clear")))
+    assert cleared["status"] == "context_reset"
+    assert cleared["previous_session_id"] == old_session_id
+    new_session_id = str(cleared["session_id"])
+    assert new_session_id != old_session_id
+    assert sender.messages[-1][1] == "上下文窗口已清空，旧会话记录仍保留。"
+
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    assert any(message.content == "旧上下文" for message in sessions.list_messages(old_session_id))
+    assert sessions.list_messages(new_session_id) == []
+
+    after = asyncio_run(adapter.handle_event(_private(103, "新上下文")))
+    assert after["session_id"] == new_session_id
+    new_messages = sessions.list_messages(new_session_id)
+    assert any(message.content == "新上下文" for message in new_messages)
+    assert all(message.content != "/clear" for message in new_messages)
+
+
 def test_non_owner_and_group_ignored(engine: Engine, settings: Settings) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)

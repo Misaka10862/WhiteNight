@@ -10,6 +10,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 
 from whitenight.agent.context import build_provider_messages, load_soul
@@ -36,6 +37,16 @@ from whitenight.tools.executor import ExecutionOutcome, ToolExecutor
 from whitenight.tools.pending import PendingToolStore, params_digest
 
 logger = logging.getLogger(__name__)
+
+_FILE_SEND_INTENT_RE = re.compile(r"(?:发给我|发送给我|传给我|发过来|发送文件|上传文件)")
+_FILE_CONTEXT_RE = re.compile(
+    r"(?:文件|文档|附件|报告|表格|压缩包|数据集|[A-Za-z0-9_.()-]+\.[A-Za-z0-9]{1,10})",
+    re.IGNORECASE,
+)
+_SHORT_FILE_SEND_RE = re.compile(
+    r"^(?:好的?[，,\s]*)?(?:直接发|发吧|发|速发|快发|赶紧发)(?:给我)?[！!。.]?$"
+)
+_MAX_ORCHESTRATED_FILE_SENDS = 20
 
 
 class ChatService:
@@ -151,6 +162,9 @@ class ChatService:
 
         try:
             history = self._store.list_messages(session_id)
+            file_delivery_required = self._requires_file_delivery(
+                request.text, history, trusted_channel
+            )
             messages = build_provider_messages(
                 history,
                 load_soul(self._settings.soul_file),
@@ -158,6 +172,9 @@ class ChatService:
             )
             text_parts: list[str] = []
             seen_calls: set[str] = set()
+            discovered_paths: set[str] = set()
+            sent_paths: set[str] = set()
+            fallback_attempted = False
             supports_tools = "tools" in inspect.signature(self._provider.stream_chat).parameters
             tool_specs = (
                 self._tools.specs(
@@ -179,14 +196,94 @@ class ChatService:
                 async for chunk in stream:
                     if chunk.delta:
                         turn_parts.append(chunk.delta)
-                        text_parts.append(chunk.delta)
-                        yield ChatEvent(type="chunk", delta=chunk.delta)
+                        if not file_delivery_required or self._file_delivery_complete(
+                            discovered_paths, sent_paths
+                        ):
+                            text_parts.append(chunk.delta)
+                            yield ChatEvent(type="chunk", delta=chunk.delta)
                     if chunk.tool_calls:
                         calls.extend(chunk.tool_calls)
                     if chunk.done:
                         break
 
                 if not calls:
+                    if file_delivery_required and not self._file_delivery_complete(
+                        discovered_paths, sent_paths
+                    ):
+                        if (
+                            discovered_paths
+                            and not fallback_attempted
+                            and len(discovered_paths) <= _MAX_ORCHESTRATED_FILE_SENDS
+                        ):
+                            fallback_attempted = True
+                            fallback_calls = [
+                                ToolCall(
+                                    id=f"orchestrator-send-{_round}-{index}",
+                                    name="channel.file.send",
+                                    arguments={"path": path},
+                                )
+                                for index, path in enumerate(sorted(discovered_paths))
+                            ]
+                            messages.append(
+                                ProviderMessage(role="assistant", tool_calls=fallback_calls)
+                            )
+                            assert self._tool_executor is not None
+                            fallback_outcomes = await asyncio.gather(
+                                *(
+                                    asyncio.to_thread(
+                                        self._tool_executor.execute,
+                                        call.name,
+                                        call.arguments,
+                                        session_id=session_id,
+                                        channel=trusted_channel.channel,
+                                        channel_target=trusted_channel.target,
+                                        file_delivery=self._file_delivery,
+                                        data_dir=str(self._settings.data_dir),
+                                    )
+                                    for call in fallback_calls
+                                )
+                            )
+                            for call, outcome in zip(
+                                fallback_calls, fallback_outcomes, strict=True
+                            ):
+                                yield ChatEvent(
+                                    type="tool",
+                                    session_id=session_id,
+                                    extra={
+                                        "tool_name": call.name,
+                                        "status": outcome.status,
+                                        "message": outcome.message,
+                                        "orchestrated": True,
+                                    },
+                                )
+                                self._record_file_goal_result(
+                                    call, outcome, discovered_paths, sent_paths
+                                )
+                                messages.append(
+                                    ProviderMessage(
+                                        role="tool",
+                                        name=call.name,
+                                        tool_call_id=call.id,
+                                        content=json.dumps(
+                                            self._tool_result_payload(outcome),
+                                            ensure_ascii=False,
+                                        ),
+                                    )
+                                )
+                            if self._file_delivery_complete(discovered_paths, sent_paths):
+                                break
+                            continue
+                        messages.append(
+                            ProviderMessage(
+                                role="system",
+                                content=(
+                                    "本轮用户要求发送文件，但目标尚未完成。不要输出解释、承诺或"
+                                    "完成声明；立即调用可用的文件查找/发送工具。只有 "
+                                    "channel.file.send 返回成功才能结束。"
+                                ),
+                            )
+                        )
+                        continue
                     break
                 call_keys = [
                     json.dumps(
@@ -238,6 +335,7 @@ class ChatService:
                     if outcome.status == "waiting_approval":
                         waiting.append((call, outcome))
                     else:
+                        self._record_file_goal_result(call, outcome, discovered_paths, sent_paths)
                         messages.append(
                             ProviderMessage(
                                 role="tool",
@@ -294,6 +392,10 @@ class ChatService:
                         extra={"user_message_id": user_message.id},
                     )
                     return
+                if file_delivery_required and self._file_delivery_complete(
+                    discovered_paths, sent_paths
+                ):
+                    break
             else:
                 raise RuntimeError("工具调用超过 8 轮，已安全终止")
         except Exception as exc:  # Provider/存储异常：不伪造回复，原样报告
@@ -302,6 +404,16 @@ class ChatService:
             return
 
         reply = "".join(text_parts).strip()
+        if file_delivery_required and not self._file_delivery_complete(
+            discovered_paths, sent_paths
+        ):
+            yield ChatEvent(
+                type="error",
+                message="文件发送目标未完成：发送工具没有成功处理全部已找到文件",
+            )
+            return
+        if file_delivery_required:
+            reply = f"已发送 {len(sent_paths)} 个文件。"
         if not reply:
             yield ChatEvent(type="error", message="模型没有产生可见回复，请重试")
             return
@@ -583,6 +695,53 @@ class ChatService:
             ),
             "metadata": outcome.result.metadata if outcome.result else {},
         }
+
+    @staticmethod
+    def _record_file_goal_result(
+        call: ToolCall,
+        outcome: ExecutionOutcome,
+        discovered_paths: set[str],
+        sent_paths: set[str],
+    ) -> None:
+        if outcome.status != "ok" or outcome.result is None:
+            return
+        if call.name == "file.find":
+            discovered_paths.update(
+                source.uri
+                for source in outcome.result.sources
+                if source.kind == "file" and source.uri
+            )
+        elif call.name == "channel.file.send":
+            path = outcome.result.metadata.get("path")
+            if isinstance(path, str) and path:
+                sent_paths.add(path)
+
+    @staticmethod
+    def _file_delivery_complete(discovered_paths: set[str], sent_paths: set[str]) -> bool:
+        return bool(sent_paths) and (not discovered_paths or discovered_paths <= sent_paths)
+
+    @staticmethod
+    def _requires_file_delivery(
+        request_text: str,
+        history: list[MessageRecord],
+        channel_context: ChannelContext,
+    ) -> bool:
+        if channel_context.channel != "onebot" or not channel_context.target:
+            return False
+        text = request_text.strip()
+        if _FILE_SEND_INTENT_RE.search(text) and _FILE_CONTEXT_RE.search(text):
+            return True
+        if not _SHORT_FILE_SEND_RE.fullmatch(text):
+            return False
+        recent_user_text = [
+            message.content
+            for message in history[-16:]
+            if message.role == "user" and message.content != request_text
+        ]
+        return any(
+            _FILE_SEND_INTENT_RE.search(content) and _FILE_CONTEXT_RE.search(content)
+            for content in recent_user_text
+        )
 
     async def _delegate_reply(
         self,

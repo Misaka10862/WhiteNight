@@ -13,7 +13,11 @@ Last update: 2026-08-22 (Enabled parallel tool calls and confirmation-free trust
   canonical path, regular-file status, size limit and SHA-256 immediately before upload. Other
   state-changing file operations keep their existing approval levels. The immutable system safety
   appendix now also requires file intents and short follow-ups such as "send it" to complete through
-  real tool results, and forbids claiming success or future execution in place of a tool call.
+  real tool results, and forbids claiming success or future execution in place of a tool call. The
+  orchestrator now enforces that contract: a file-delivery turn cannot finish until every file found
+  in that turn has a successful `channel.file.send` result; if a small model only promises to send,
+  the validated find results are completed through `ToolExecutor`. QQ `/clear` rotates to a fresh
+  context while retaining the old session for debugging and audit.
 
 - **Minimal Authentication Scheme (User Confirmation)**: LoRA training suspended; temporary use of native `qwen3:8b`
   Text model + SOUL.md presets the personality to pass the minimum verification; then the model with visual ability will be trained according to the formal plan.
