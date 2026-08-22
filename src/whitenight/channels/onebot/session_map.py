@@ -40,3 +40,29 @@ class ChannelSessionStore:
             )
             orm.commit()
         return session.id
+
+    def reset(self, channel: str, owner_key: str) -> tuple[str | None, str]:
+        """Rotate the channel mapping to a fresh session without deleting prior history."""
+        new_session = self._sessions.create_session(f"QQ·{owner_key} · reset")
+        with OrmSession(self._engine, expire_on_commit=False) as orm:
+            row = orm.scalar(
+                select(ChannelSession).where(
+                    ChannelSession.channel == channel,
+                    ChannelSession.owner_key == owner_key,
+                )
+            )
+            previous_id = row.session_id if row is not None else None
+            if row is None:
+                orm.add(
+                    ChannelSession(
+                        channel=channel,
+                        owner_key=owner_key,
+                        session_id=new_session.id,
+                        updated_at=datetime.now(UTC),
+                    )
+                )
+            else:
+                row.session_id = new_session.id
+                row.updated_at = datetime.now(UTC)
+            orm.commit()
+        return previous_id, new_session.id
