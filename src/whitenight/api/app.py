@@ -24,6 +24,7 @@ from whitenight.agent.context import load_soul
 from whitenight.agent.service import ChatService, create_chat_service
 from whitenight.channels.onebot import ChannelSessionStore, OneBotAdapter, OneBotSender
 from whitenight.channels.types import (
+    ChannelContext,
     ChatEvent,
     ChatRequest,
     MessageRecord,
@@ -33,7 +34,7 @@ from whitenight.channels.types import (
 from whitenight.config import DEFAULT_CONFIG_PATH, Settings, load_settings
 from whitenight.credentials.keychain import get_keychain
 from whitenight.delegates.codex import CodexAdapter
-from whitenight.delegates.hermes import HermesGatewayAdapter
+from whitenight.delegates.hermes_ws import HermesProcessManager, ManagedHermesGatewayAdapter
 from whitenight.delegates.manager import DelegateManager, TaskRecord, TaskStore
 from whitenight.logging_config import setup_logging
 from whitenight.memory import (
@@ -67,6 +68,23 @@ from whitenight.scheduler.types import PauseRequest, ProactiveConfig, ProactiveS
 from whitenight.storage.engine import backend_of, build_engine, ping, resolve_database_key
 from whitenight.storage.migrate import upgrade_to_head
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
+from whitenight.tools import (
+    ArchiveListTool,
+    ChannelFileSendTool,
+    DocumentParseTool,
+    FileCreateTool,
+    FileDeleteTool,
+    FileFindTool,
+    FileMoveTool,
+    FileReadTool,
+    FileWriteTool,
+    ScreenshotTool,
+    ToolExecutor,
+    ToolRegistry,
+    WebFetchTool,
+    WebSearchTool,
+)
+from whitenight.tools.pending import PendingToolStore
 
 
 class ExtractRequest(BaseModel):
@@ -149,17 +167,17 @@ def create_app(
             ),
         )
         store = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+        credential_store = get_keychain(settings.keychain_backend)
         if model_provider is not None:
             provider = model_provider
         elif settings.model_provider == "openai":
-            keychain = get_keychain(settings.keychain_backend)
             provider = OpenAIProvider(
                 base_url=settings.openai_base_url,
                 model=settings.model_name,
                 api_key=None,
                 timeout_s=settings.openai_timeout_s,
                 max_output_tokens=settings.model_max_output_tokens,
-                key_provider=lambda: keychain.get(
+                key_provider=lambda: credential_store.get(
                     settings.keychain_service, settings.openai_api_key_account
                 ),
             )
@@ -172,6 +190,26 @@ def create_app(
             )
         audit = AuditService(engine)
         approvals = ApprovalService(engine)
+        policy = PolicyEngine()
+        onebot_sender = OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars)
+        tool_registry = ToolRegistry(
+            [
+                FileFindTool(),
+                FileReadTool(),
+                FileCreateTool(),
+                FileWriteTool(),
+                FileMoveTool(),
+                FileDeleteTool(),
+                DocumentParseTool(),
+                ArchiveListTool(),
+                ScreenshotTool(),
+                WebSearchTool(),
+                WebFetchTool(),
+                ChannelFileSendTool(settings.qq_file_send_max_bytes),
+            ]
+        )
+        tool_executor = ToolExecutor(tool_registry, policy, approvals, audit)
+        pending_tools = PendingToolStore(engine)
         extractor = memory_extractor or _build_memory_extractor(settings, provider)
         embedding_provider = (
             OllamaEmbeddingProvider(settings.ollama_base_url, settings.embedding_model)
@@ -182,7 +220,7 @@ def create_app(
         proactive_store = ProactiveStore(engine)
         proactive_sender: LogSender | NullSender | OneBotSender
         if settings.proactive_sender == "qq" and settings.qq_owner_ids:
-            proactive_sender = OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars)
+            proactive_sender = onebot_sender
         else:
             proactive_sender = (
                 LogSender(settings.data_dir / "logs" / "proactive.jsonl")
@@ -195,11 +233,28 @@ def create_app(
         proactive_stop = asyncio.Event()
         proactive_task = asyncio.create_task(proactive_service.run_forever(proactive_stop))
         task_store = TaskStore(engine)
+        hermes_process = HermesProcessManager(
+            settings.hermes_gateway_url,
+            settings.hermes_command,
+            lambda: credential_store.get(
+                settings.keychain_service, settings.deepseek_api_key_account
+            ),
+            settings.hermes_startup_timeout_s,
+            settings.hermes_managed,
+        )
+        hermes_adapter = ManagedHermesGatewayAdapter(
+            hermes_process,
+            approvals,
+            base_url=settings.hermes_gateway_url,
+            provider=settings.hermes_provider,
+            model=settings.hermes_model,
+            timeout_s=settings.codex_timeout_s,
+        )
         delegate_manager = DelegateManager(
             task_store,
             {
                 "codex": CodexAdapter(settings.codex_command, settings.codex_timeout_s),
-                "hermes": HermesGatewayAdapter(settings.hermes_gateway_url),
+                "hermes": hermes_adapter,
             },
         )
         router = RoutingEngine(
@@ -214,6 +269,12 @@ def create_app(
             router,
             delegate_manager,
             proactive_service,
+            tool_registry,
+            tool_executor,
+            approvals,
+            pending_tools,
+            policy,
+            onebot_sender,
         )
         channel_sessions = ChannelSessionStore(engine, store)
         onebot_adapter = OneBotAdapter(
@@ -222,14 +283,17 @@ def create_app(
             channel_sessions,
             chat_service,
             approvals,
-            OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars),
+            onebot_sender,
         )
         _app.state.engine = engine
         _app.state.store = store
         _app.state.memory_service = memory_service
         _app.state.approvals = approvals
         _app.state.audit = audit
-        _app.state.policy = PolicyEngine()
+        _app.state.policy = policy
+        _app.state.tool_registry = tool_registry
+        _app.state.tool_executor = tool_executor
+        _app.state.pending_tools = pending_tools
         _app.state.proactive_service = proactive_service
         _app.state.task_store = task_store
         _app.state.delegate_manager = delegate_manager
@@ -238,6 +302,7 @@ def create_app(
         _app.state.chat_service = chat_service
         yield
         proactive_stop.set()
+        await hermes_adapter.close()
         try:
             await asyncio.wait_for(proactive_task, timeout=10)
         except TimeoutError:
@@ -357,14 +422,50 @@ def create_app(
     @app.post("/api/v1/approvals/{code}/approve")
     async def approve_request(code: str, payload: ApprovalAction) -> dict[str, object]:
         service: ApprovalService = app.state.approvals
-        pending = [item for item in service.list_pending() if item.code == code]
-        scope = pending[0].scope if pending else "once"
+        pending = app.state.pending_tools.get_by_code(code)
+        if pending is not None:
+            events = await app.state.chat_service.resume_approval(
+                code, ChannelContext(channel="web")
+            )
+            final = events[-1] if events else ChatEvent(type="error", message="审批恢复无结果")
+            return {
+                "ok": final.type != "error",
+                "reason": final.message or final.text or "已执行",
+                "scope": "once",
+                "execution_status": "succeeded" if final.type != "error" else "failed",
+                "message_id": final.message_id,
+            }
+        pending_items = [item for item in service.list_pending() if item.code == code]
+        if pending_items and pending_items[0].tool_name == "delegate.hermes.action":
+            hermes = app.state.delegate_manager.providers().get("hermes")
+            responder = getattr(hermes, "respond_approval", None)
+            ok = bool(responder and await responder(code, True))
+            return {
+                "ok": ok,
+                "reason": "已批准并恢复 Hermes" if ok else "Hermes 审批无法恢复",
+                "scope": "once",
+                "execution_status": "running" if ok else "failed",
+                "message_id": None,
+            }
+        scope = pending_items[0].scope if pending_items else "once"
         resolution = service.resolve_once(code, session_id=payload.session_id, expected_scope=scope)
         return {"ok": resolution.ok, "reason": resolution.reason, "scope": resolution.scope}
 
     @app.post("/api/v1/approvals/{code}/reject")
     async def reject_request(code: str) -> dict[str, object]:
         service: ApprovalService = app.state.approvals
+        pending = app.state.pending_tools.get_by_code(code)
+        if pending is not None:
+            reason = await app.state.chat_service.reject_approval(
+                code, ChannelContext(channel="web")
+            )
+            return {"ok": reason == "已拒绝", "reason": reason}
+        pending_items = [item for item in service.list_pending() if item.code == code]
+        if pending_items and pending_items[0].tool_name == "delegate.hermes.action":
+            hermes = app.state.delegate_manager.providers().get("hermes")
+            responder = getattr(hermes, "respond_approval", None)
+            ok = bool(responder and await responder(code, False))
+            return {"ok": ok, "reason": "已拒绝 Hermes 操作" if ok else "拒绝失败"}
         resolution = service.reject(code)
         return {"ok": resolution.ok, "reason": resolution.reason}
 

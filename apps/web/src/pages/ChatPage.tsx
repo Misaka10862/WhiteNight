@@ -35,6 +35,7 @@ export default function ChatPage({
   const [streamingText, setStreamingText] = useState('')
   const [pendingUser, setPendingUser] = useState<PendingUser | null>(null)
   const [taskEvent, setTaskEvent] = useState<DelegateEvent | null>(null)
+  const [toolStatus, setToolStatus] = useState<string | null>(null)
   const [chatError, setChatError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -49,6 +50,7 @@ export default function ChatPage({
     setPendingUser({ content: draft, imageUrl })
     setStreamingText('')
     setTaskEvent(null)
+    setToolStatus(null)
     setStreaming(true)
     setChatError(null)
 
@@ -67,10 +69,17 @@ export default function ChatPage({
         setStreamingText((previous) => previous + message.delta)
       } else if (message.type === 'task' && message.extra?.delegate_event) {
         setTaskEvent(message.extra.delegate_event)
+      } else if (message.type === 'tool') {
+        const name = message.extra?.tool_name ?? '工具'
+        const status = message.extra?.status ?? 'running'
+        setToolStatus(`${name} · ${status}${message.extra?.message ? `：${message.extra.message}` : ''}`)
+      } else if (message.type === 'approval') {
+        setToolStatus(message.text ?? '操作等待审批')
       } else if (message.type === 'done') {
         setPendingUser(null)
         setStreamingText('')
         setTaskEvent(null)
+        setToolStatus(null)
         setStreaming(false)
         socket.close()
         queryClient.invalidateQueries({ queryKey: ['messages', activeId] })
@@ -157,6 +166,14 @@ export default function ChatPage({
               </div>
             </div>
           )}
+          {toolStatus && (
+            <div className="row assistant">
+              <div className="bubble task-bubble" role="status">
+                <strong>工具</strong>
+                <p>{toolStatus}</p>
+              </div>
+            </div>
+          )}
           {streamingText && (
             <div className="row assistant">
               <div className="bubble">
@@ -223,6 +240,16 @@ export default function ChatPage({
 
 function MessageBubble({ message }: { message: MessageRecord }) {
   const isUser = message.role === 'user'
+  if (message.role === 'tool') {
+    return (
+      <div className="row assistant">
+        <div className="bubble task-bubble">
+          <strong>工具结果</strong>
+          <p>{message.content.slice(0, 240)}</p>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className={isUser ? 'row user' : 'row assistant'}>
       <div className="bubble">

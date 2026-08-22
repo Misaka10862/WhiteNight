@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""配置 QQ / OneBot（阶段 8 收尾工具，非破坏性：写前自动备份）。
+"""Configure QQ / OneBot for stage 8, backing up before writing.
 
-用法：
+Usage:
     uv run scripts/configure_qq.py --owner 10001
     uv run scripts/configure_qq.py --owner 10001 --owner 10002 \
         --api-url http://127.0.0.1:3000 --no-enable
@@ -34,24 +34,24 @@ def main() -> int:
     if path.exists():
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if not isinstance(loaded, dict):
-            print(f"配置文件不是映射：{path}", file=sys.stderr)
+            print(f"Configuration root is not a mapping: {path}", file=sys.stderr)
             return 1
         data = loaded
 
     if path.exists():
         backup = path.with_suffix(f".bak-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
         shutil.copy2(path, backup)
-        print(f"已备份：{backup}")
+        print(f"Backup created: {backup}")
 
     data["qq_enabled"] = args.enable
     data["qq_owner_ids"] = args.owner
     data["qq_onebot_api_url"] = args.api_url
     path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=True), encoding="utf-8")
-    print(f"已写入：{path}")
+    print(f"Updated: {path}")
     print(f"  qq_enabled={data['qq_enabled']}")
     print(f"  qq_owner_ids={data['qq_owner_ids']}")
     print(f"  qq_onebot_api_url={data['qq_onebot_api_url']}")
-    print("重启 WhiteNight 后生效；然后在 NapCat WebUI 配置 HTTP 上报：")
+    print("Restart WhiteNight, then configure the NapCat WebUI HTTP event target:")
     print("  http://127.0.0.1:8765/api/v1/onebot/events")
     return 0
 

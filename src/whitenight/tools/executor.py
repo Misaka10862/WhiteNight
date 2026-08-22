@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from whitenight.policy.approvals import ApprovalService, Resolution
 from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import ApprovalMode, PolicyEngine
-from whitenight.tools.base import ToolContext, ToolRegistry, ToolResult
+from whitenight.tools.base import FileDeliveryProvider, ToolContext, ToolRegistry, ToolResult
 
 
 @dataclass
@@ -64,7 +64,10 @@ class ToolExecutor:
         channel: str | None = None,
         actor: str = "whitenight",
         approval_code: str | None = None,
+        approval_id: str | None = None,
         data_dir: str = "data",
+        channel_target: str | None = None,
+        file_delivery: FileDeliveryProvider | None = None,
     ) -> ExecutionOutcome:
         decision = self._policy.evaluate(tool_name)
         tool = self._registry.get(tool_name)
@@ -100,9 +103,44 @@ class ToolExecutor:
             )
             return ExecutionOutcome(status="refused", message=f"参数不合法：{exc}")
 
-        approval_id: str | None = None
+        context = ToolContext(
+            data_dir=data_dir,
+            actor=actor,
+            channel=channel,
+            channel_target=channel_target,
+            file_delivery=file_delivery,
+        )
+        approval_metadata: dict[str, Any] = {}
+        prepare = getattr(tool, "approval_metadata", None)
+        if callable(prepare):
+            try:
+                approval_metadata = dict(prepare(validated, context))
+                prepared = approval_metadata.get("prepared_params")
+                if isinstance(prepared, dict):
+                    params = prepared
+                    validated = tool.validate(prepared)
+                approval_summary = approval_metadata.get("approval_summary")
+                if isinstance(approval_summary, dict):
+                    summary = summarize_params(approval_summary)
+            except (ValidationError, ValueError) as exc:
+                return ExecutionOutcome(status="refused", message=f"参数不合法：{exc}")
 
-        if decision.mode is ApprovalMode.AUTO:
+        consumed_approval_id: str | None = None
+
+        if approval_id is not None:
+            expected_scope = "session" if decision.mode is ApprovalMode.SESSION else "once"
+            resolution = self._approvals.consume_approved(
+                approval_id,
+                session_id=session_id,
+                expected_scope=expected_scope,
+            )
+            if not resolution.ok:
+                return self._refused_resolution(
+                    tool_name, decision, summary, resolution, actor, session_id, channel
+                )
+            consumed_approval_id = resolution.approval_id
+
+        if approval_id is not None or decision.mode is ApprovalMode.AUTO:
             pass
         elif decision.mode is ApprovalMode.SESSION:
             if session_id and self._approvals.has_session_grant(session_id, tool_name):
@@ -115,7 +153,7 @@ class ToolExecutor:
                     return self._refused_resolution(
                         tool_name, decision, summary, resolution, actor, session_id, channel
                     )
-                approval_id = resolution.approval_id
+                consumed_approval_id = resolution.approval_id
             else:
                 request = self._approvals.request(
                     tool_name=tool_name,
@@ -131,6 +169,7 @@ class ToolExecutor:
                     approval_id=request.id,
                     approval_code=request.code,
                     approval_scope="session",
+                    metadata=approval_metadata,
                 )
         elif decision.mode is ApprovalMode.ONCE:
             if not approval_code:
@@ -148,6 +187,7 @@ class ToolExecutor:
                     approval_id=request.id,
                     approval_code=request.code,
                     approval_scope="once",
+                    metadata=approval_metadata,
                 )
             resolution = self._approvals.resolve_once(
                 approval_code, session_id=session_id, expected_scope="once"
@@ -156,12 +196,12 @@ class ToolExecutor:
                 return self._refused_resolution(
                     tool_name, decision, summary, resolution, actor, session_id, channel
                 )
-            approval_id = resolution.approval_id
+            consumed_approval_id = resolution.approval_id
         else:  # 理论不可达：defense in depth
             return ExecutionOutcome(status="refused", message="未知审批模式")
 
         try:
-            result = tool.execute(ToolContext(data_dir=data_dir, actor=actor), validated)
+            result = tool.execute(context, validated)
         except Exception as exc:  # 工具异常如实记录，不吞掉也不执行后续动作
             self._audit.record(
                 actor=actor,
@@ -173,11 +213,11 @@ class ToolExecutor:
                 result_summary=str(exc),
                 session_id=session_id,
                 channel=channel,
-                approval_id=approval_id,
+                approval_id=consumed_approval_id,
             )
             return ExecutionOutcome(status="error", message=f"{tool_name} 执行失败：{exc}")
 
-        decision_label = "approved" if approval_id else ("auto" if result.ok else "error")
+        decision_label = "approved" if consumed_approval_id else ("auto" if result.ok else "error")
         self._audit.record(
             actor=actor,
             action=f"tool.{'ok' if result.ok else 'failed'}",
@@ -188,13 +228,13 @@ class ToolExecutor:
             result_summary=result.summary if result.ok else (result.error or ""),
             session_id=session_id,
             channel=channel,
-            approval_id=approval_id,
+            approval_id=consumed_approval_id,
         )
         return ExecutionOutcome(
             status="ok" if result.ok else "error",
             message=result.summary if result.ok else (result.error or "工具失败"),
             result=result,
-            approval_id=approval_id,
+            approval_id=consumed_approval_id,
         )
 
     def _refused_resolution(

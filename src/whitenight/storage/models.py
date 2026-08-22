@@ -98,6 +98,34 @@ class Approval(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PendingToolCall(Base):
+    """Durable continuation for a tool call waiting on user approval."""
+
+    __tablename__ = "pending_tool_calls"
+    __table_args__ = (
+        Index("ix_pending_tool_calls_approval", "approval_id", unique=True),
+        Index("ix_pending_tool_calls_session", "session_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    approval_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel_target: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tool_call_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    params_json: Mapped[str] = mapped_column(Text, nullable=False)
+    params_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    assistant_content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class SessionGrant(Base):
     """按会话授权的工具类别（低风险写入等）。"""
 

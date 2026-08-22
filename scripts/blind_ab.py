@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""小白人格盲测 A/B 脚本（阶段 9，非破坏性）。
+"""Run a non-destructive stage 9 blind persona A/B evaluation.
 
-- run：把两个模型随机打码为 A/B，逐题输出两个匿名回复，结果存
-  data/reports/ab-*.json；
-- reveal：读取 run 报告并显示 A/B 与模型名映射，供用户裁决后填写结果。
+The run command randomizes models as A/B and stores anonymous responses under
+data/reports. The reveal command displays the model mapping after evaluation.
 
-用法：
+Usage:
     uv run scripts/blind_ab.py run --model-a qwen3-vl:8b --model-b <candidate> \
         --eval-file evals/persona/golden.jsonl
     uv run scripts/blind_ab.py reveal <data/reports/ab-*.json>
@@ -73,23 +72,23 @@ def run(args: argparse.Namespace) -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"ab-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"盲测已生成：{path}")
-    print("模型已随机打码为 A/B；请逐题比较后运行 reveal 查看映射。")
+    print(f"Blind evaluation generated: {path}")
+    print("Models are randomized as A/B. Compare each row before running reveal.")
     return 0
 
 
 def reveal(args: argparse.Namespace) -> int:
     report = json.loads(Path(args.report).read_text(encoding="utf-8"))
-    print(f"报告：{args.report}")
+    print(f"Report: {args.report}")
     print(f"A = {report['mapping']['A']}")
     print(f"B = {report['mapping']['B']}")
-    print(f"是否交换：{report['swapped']}")
+    print(f"Labels swapped: {report['swapped']}")
     for row in report["rows"]:
         print(f"\n[{row['id']}] {row['prompt']}")
         print(f"A: {row['A'][:120]!r}")
         print(f"B: {row['B'][:120]!r}")
-    print("\n用户裁决：在报告中记录每题的 winner（A/B/平）与理由；")
-    print("未通过主观人格验收的候选版本不得成为默认模型。")
+    print("\nRecord the winner (A/B/tie) and rationale for each row in the report.")
+    print("A candidate that fails subjective persona review cannot become the default.")
     return 0
 
 

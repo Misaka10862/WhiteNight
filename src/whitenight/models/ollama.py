@@ -13,7 +13,13 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from whitenight.models.base import ModelChunk, ModelProviderError, ProviderMessage
+from whitenight.models.base import (
+    ModelChunk,
+    ModelProviderError,
+    ProviderMessage,
+    ToolCall,
+    ToolSpec,
+)
 
 
 class OllamaProvider:
@@ -50,17 +56,31 @@ class OllamaProvider:
         except ValueError:
             return self.keep_alive
 
-    async def stream_chat(self, messages: list[ProviderMessage]) -> AsyncIterator[ModelChunk]:
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncIterator[ModelChunk]:
+        def message_payload(message: ProviderMessage) -> dict[str, object]:
+            payload: dict[str, object] = {"role": message.role, "content": message.content}
+            if message.images:
+                payload["images"] = message.images
+            if message.tool_call_id:
+                payload["tool_call_id"] = message.tool_call_id
+            if message.name:
+                payload["name"] = message.name
+            if message.tool_calls:
+                payload["tool_calls"] = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": call.arguments},
+                    }
+                    for call in message.tool_calls
+                ]
+            return payload
+
         payload = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": message.role,
-                    "content": message.content,
-                    **({"images": message.images} if message.images else {}),
-                }
-                for message in messages
-            ],
+            "messages": [message_payload(message) for message in messages],
             "stream": True,
             # 常驻模型：默认 keep_alive=5m 会让闲置后的首条消息等模型重新加载（实测 ~17s），
             # -1 保持常驻以消除冷启动延迟。
@@ -71,6 +91,18 @@ class OllamaProvider:
             # 占住唯一推理槽，导致 QQ 长时间“无回复”（实测 n_decoded > 4000）。
             "options": {"num_predict": self.max_output_tokens},
         }
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ]
         async with (
             self._client() as client,
             client.stream("POST", "/api/chat", json=payload) as response,
@@ -80,6 +112,7 @@ class OllamaProvider:
                 raise ModelProviderError(
                     f"Ollama /api/chat 返回 {response.status_code}: {body[:500]}"
                 )
+            pending_tool_calls: list[ToolCall] = []
             async for line in response.aiter_lines():
                 if not line:
                     continue
@@ -90,10 +123,25 @@ class OllamaProvider:
                 message = data.get("message", {})
                 delta = message.get("content") or ""
                 thinking = message.get("thinking") or ""
+                for raw_call in message.get("tool_calls") or []:
+                    function = raw_call.get("function") or {}
+                    arguments = function.get("arguments") or {}
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+                    pending_tool_calls.append(
+                        ToolCall(
+                            id=str(raw_call.get("id") or f"ollama-{len(pending_tool_calls)}"),
+                            name=str(function.get("name") or ""),
+                            arguments=arguments if isinstance(arguments, dict) else {},
+                        )
+                    )
                 if delta or thinking:
                     yield ModelChunk(delta=delta, thinking=thinking)
                 if data.get("done"):
-                    yield ModelChunk(done=True)
+                    yield ModelChunk(done=True, tool_calls=pending_tool_calls)
                     break
 
     async def health(self) -> dict[str, object]:

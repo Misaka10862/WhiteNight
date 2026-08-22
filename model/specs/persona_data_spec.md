@@ -9,6 +9,7 @@ One JSON object per line (JSONL), UTF-8, no BOM:
 
 ```json
 {
+  "sample_id": "3f8b4c18a921",
   "messages": [
 {"role": "user", "content": "Xiaobai, I'm so tired today"},
 {"role": "assistant", "content": "Thank you for your hard work, Master. Come and stay for a while."}
@@ -16,10 +17,14 @@ One JSON object per line (JSONL), UTF-8, no BOM:
   "category": "comfort",
   "source": "synthetic-whitenight-sample",
   "license": "CC0-1.0",
-  "reviewed": true,
+  "reviewed": false,
   "tone_tags": ["gentle", "soft"],
   "language": "zh",
-  "version": "v1"
+  "version": "v1",
+  "content_rating": "general",
+  "provenance": {"kind": "project-authored-synthetic"},
+  "consent_tags": [],
+  "generation_metadata": {"method": "deterministic-scenario-composition"}
 }
 ```
 
@@ -27,8 +32,27 @@ One JSON object per line (JSONL), UTF-8, no BOM:
   Content must not contain system prompts, tool JSON, or permission rules.
 - `category` is required, the value is shown below.
 - `source` / `license`: Each sample must be traceable to the source; samples without a license or with unknown sources are refused to be included in the library.
-- `reviewed`: `true` can be trained; false can only be used as a candidate.
+- `reviewed`: `true` can be trained; `false` can only be validated in candidate mode.
 - `tone_tags`: free tags, used for review retrieval.
+- `sample_id`: first 12 hexadecimal characters of the canonical messages SHA-256.
+- `content_rating`: `general` or `adult`. Adult samples are stored separately and are limited
+  to the `romance` and `relationship` categories.
+- `provenance` and `generation_metadata`: structured traceability for source adaptation or
+  generation. `consent_tags` must contain `adults` and `consensual` for adult samples.
+
+## Validation modes
+
+```bash
+# Candidate review: reviewed=false is permitted.
+uv run scripts/validate_training_data.py --mode candidate FILE...
+
+# Training gate: every sample must have reviewed=true.
+uv run scripts/validate_training_data.py --mode training FILE...
+```
+
+Adult candidates must describe consenting adults, allow consent to be withdrawn, and must not
+contain minors, coercion, intoxication used to obtain consent, incest, exploitation, or real-person
+sexual content. They require the user's final acceptance before entering a training split.
 
 ## Category (Build Plan 15.1)
 

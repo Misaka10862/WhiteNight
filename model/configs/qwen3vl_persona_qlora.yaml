@@ -1,17 +1,17 @@
-# WhiteNight 人格 LoRA 训练配置（ms-swift，阶段 9 参考基线）
+# WhiteNight persona LoRA training baseline for stage 9 (ms-swift).
 #
-# 实际执行前：以安装的 ms-swift 版本 `swift export --help` / 文档为准，
-# 并把本文件作为 baseline 复制到 model/runs/<run-id>/。
-# 关键策略：冻结视觉塔（freeze_vit），保护图片理解能力。
+# Before a real run, verify the installed ms-swift CLI and documentation, then
+# copy this baseline into model/runs/<run-id>/.
+# Freeze the visual tower to protect image-understanding capability.
 
-# --- 模型与数据 ---
+# --- Model and data ---
 model: Qwen/Qwen3-VL-8B-Instruct
 train_type: lora
 dataset: model/data/splits/train.jsonl
 val_dataset: model/data/splits/val.jsonl
 output_dir: model/runs/persona-v1
 
-# --- 视觉塔冻结（阶段 1 结论：图片能力必须回归） ---
+# --- Visual tower freeze; image capability remains a regression gate ---
 freeze_vit: true
 freeze_aligner: false
 
@@ -21,7 +21,7 @@ lora_alpha: 64
 lora_dropout: 0.05
 target_modules: all-linear
 
-# --- 训练超参（8B，单卡 ≥ 24GB；最终以租用 GPU 实测为准） ---
+# --- Training hyperparameters: 8B, one GPU with at least 24 GiB ---
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
 learning_rate: 2.0e-5
@@ -35,6 +35,6 @@ save_steps: 200
 eval_steps: 200
 save_total_limit: 3
 
-# --- 评估（训练期不注入人格 prompt） ---
+# --- Evaluation without a resident persona prompt ---
 eval_strategy: steps
 report_to: tensorboard

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,25 @@ class ProviderMessage(BaseModel):
     role: str
     content: str = ""
     images: list[str] = Field(default_factory=list)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    name: str | None = None
+
+
+class ToolCall(BaseModel):
+    """Provider-independent function call emitted by a model."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolSpec(BaseModel):
+    """Provider-independent tool definition."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
 
 
 class ModelChunk(BaseModel):
@@ -25,6 +44,7 @@ class ModelChunk(BaseModel):
 
     delta: str = ""
     thinking: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     done: bool = False
 
 
@@ -40,7 +60,9 @@ class ModelProvider(Protocol):
     这样 async generator 实现（调用即返回迭代器）能结构性满足协议。
     """
 
-    def stream_chat(self, messages: list[ProviderMessage]) -> AsyncIterator[ModelChunk]:
+    def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncIterator[ModelChunk]:
         """流式生成；yield 可见内容 delta 与可选 thinking。"""
 
     def health(self) -> Awaitable[dict[str, object]]:

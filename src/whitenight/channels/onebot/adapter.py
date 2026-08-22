@@ -21,7 +21,7 @@ from whitenight.agent.service import ChatService
 from whitenight.channels.onebot.sender import OneBotSender
 from whitenight.channels.onebot.session_map import ChannelSessionStore
 from whitenight.channels.onebot.types import OneBotPrivateMessageEvent, parse_segments
-from whitenight.channels.types import ChatRequest
+from whitenight.channels.types import ChannelContext, ChatRequest
 from whitenight.config import Settings
 from whitenight.policy.approvals import ApprovalService
 from whitenight.storage.sessions import SessionStore
@@ -115,6 +115,10 @@ class OneBotAdapter:
         if not self._dedupe.accept(str(event.message_id), user_id):
             return {"status": "duplicate"}
 
+        raw_text = event.raw_message.strip()
+        if _APPROVE_RE.match(raw_text) or _REJECT_RE.match(raw_text):
+            return await self._process_owner_message(event)
+
         lock = self._locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             delay = self._rate.wait_seconds(user_id)
@@ -169,7 +173,9 @@ class OneBotAdapter:
         reply: str | None = None
         task_note_sent = False
         owner_user_id = event.user_id
-        async for chat_event in self._chat.stream_reply(request):
+        async for chat_event in self._chat.stream_reply(
+            request, ChannelContext(channel="onebot", target=str(event.user_id))
+        ):
             if chat_event.type == "task" and not task_note_sent:
                 delegate = (chat_event.extra or {}).get("delegate_event", {})
                 if isinstance(delegate, dict) and delegate.get("type") in {"started", "error"}:
@@ -178,6 +184,13 @@ class OneBotAdapter:
                         f"[任务] {delegate.get('label', '')}",
                     )
                     task_note_sent = True
+            elif chat_event.type == "task":
+                delegate = (chat_event.extra or {}).get("delegate_event", {})
+                if isinstance(delegate, dict) and delegate.get("type") == "approval_required":
+                    await self._send(
+                        owner_user_id,
+                        f"[审批] {delegate.get('label', '')}：{delegate.get('detail', '')}",
+                    )
             elif chat_event.type == "done" and chat_event.text:
                 reply = chat_event.text
             elif chat_event.type == "error" and chat_event.message:
@@ -202,7 +215,40 @@ class OneBotAdapter:
             return {"status": "approval_invalid"}
 
         item = pending[0]
+        if item.tool_name == "delegate.hermes.action":
+            delegates = self._chat._delegates
+            hermes = delegates.providers().get("hermes") if delegates else None
+            responder = getattr(hermes, "respond_approval", None)
+            ok = bool(responder and await responder(code, bool(approve_match)))
+            await self._send(
+                event.user_id,
+                (
+                    "已批准并恢复 Hermes"
+                    if ok and approve_match
+                    else "已拒绝 Hermes 操作"
+                    if ok
+                    else "Hermes 审批无法恢复"
+                ),
+            )
+            return {"status": "approval_handled" if ok else "approval_failed"}
         if approve_match:
+            continuation = (
+                self._chat._pending_tools.get_by_code(code) if self._chat._pending_tools else None
+            )
+            if continuation is not None:
+                events = await self._chat.resume_approval(
+                    code,
+                    ChannelContext(channel="onebot", target=str(event.user_id)),
+                )
+                final = events[-1] if events else None
+                if final is not None and final.type == "done":
+                    await self._send(event.user_id, final.text or "操作已完成")
+                    return {"status": "approval_handled"}
+                await self._send(
+                    event.user_id,
+                    f"审批后执行失败：{(final.message if final else None) or '未知错误'}",
+                )
+                return {"status": "approval_failed"}
             resolution = self._approvals.resolve_once(
                 code, session_id=item.session_id, expected_scope=item.scope
             )
@@ -213,6 +259,16 @@ class OneBotAdapter:
                 else f"审批失败：{resolution.reason}",
             )
         else:
+            continuation = (
+                self._chat._pending_tools.get_by_code(code) if self._chat._pending_tools else None
+            )
+            if continuation is not None:
+                reason = await self._chat.reject_approval(
+                    code,
+                    ChannelContext(channel="onebot", target=str(event.user_id)),
+                )
+                await self._send(event.user_id, reason)
+                return {"status": "approval_handled"}
             resolution = self._approvals.reject(code)
             await self._send(
                 event.user_id,

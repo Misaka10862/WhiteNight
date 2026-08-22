@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""人格评估（阶段 9）：不注入常驻人格 prompt，直接向模型提问。
+"""Evaluate the stage 9 persona without injecting a resident persona prompt.
 
-用法：
+Usage:
     uv run scripts/eval_persona.py --model qwen3-vl:8b --eval-file evals/persona/golden.jsonl
     uv run scripts/eval_persona.py --model <tag> --json --threshold 0.8
 
-输出：终端汇总 + data/reports/persona-eval-*.json（数据目录不入 Git）。
+Output: terminal summary and an ignored data/reports/persona-eval-*.json report.
 """
 
 from __future__ import annotations
@@ -44,13 +44,13 @@ def call_model(base_url: str, model: str, prompt: str) -> str:
 def evaluate_case(case: dict[str, Any], reply: str) -> dict[str, Any]:
     failures: list[str] = []
     if len(reply) < int(case.get("min_chars", 0)):
-        failures.append("回复过短")
+        failures.append("reply is too short")
     for phrase in case.get("forbidden", []):
         if phrase.lower() in reply.lower():
-            failures.append(f"命中禁用词 {phrase!r}")
+            failures.append(f"forbidden phrase {phrase!r}")
     for phrase in case.get("must", []):
         if phrase not in reply:
-            failures.append(f"缺少必备内容 {phrase!r}")
+            failures.append(f"missing required content {phrase!r}")
     return {
         "id": case["id"],
         "prompt": case["prompt"],
@@ -97,7 +97,7 @@ def main() -> int:
             print(f"[{mark}] {result['id']}: {result['reply'][:80]!r}")
             for failure in result["failures"]:
                 print(f"      ✗ {failure}")
-        print(f"通过率 {rate:.2f}（阈值 {args.threshold:.2f}）；报告：{report_path}")
+        print(f"Pass rate {rate:.2f} (threshold {args.threshold:.2f}); report: {report_path}")
 
     return 0 if rate >= args.threshold else 1
 

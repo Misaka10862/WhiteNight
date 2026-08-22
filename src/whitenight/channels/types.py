@@ -11,8 +11,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-MessageRole = Literal["system", "user", "assistant"]
-MessageKind = Literal["text", "image", "tool_result"]
+MessageRole = Literal["system", "user", "assistant", "tool"]
+MessageKind = Literal["text", "image", "tool_call", "tool_result"]
+
+
+class ChannelContext(BaseModel):
+    """Trusted server-side channel identity; never populated from client JSON."""
+
+    channel: Literal["web", "onebot"] = "web"
+    target: str | None = None
 
 
 class ChatAttachment(BaseModel):
@@ -57,7 +64,7 @@ class ChatRequest(BaseModel):
 class ChatEvent(BaseModel):
     """标准化聊天事件（WebSocket 传输用）。"""
 
-    type: Literal["start", "chunk", "done", "error", "task"]
+    type: Literal["start", "chunk", "done", "error", "task", "tool", "approval"]
     session_id: str | None = None
     delta: str | None = None
     message_id: str | None = None

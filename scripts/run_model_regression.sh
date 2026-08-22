@@ -7,13 +7,13 @@ cd "$(dirname "$0")/.."
 MODEL="${MODEL:-qwen3-vl:8b}"
 EVAL_FILE="${EVAL_FILE:-evals/persona/golden.jsonl}"
 
-echo "==> 人格评估（不注入 system prompt）"
+echo "==> Persona evaluation without a system prompt"
 uv run scripts/eval_persona.py --model "$MODEL" --eval-file "$EVAL_FILE" --threshold 0.6
 
-echo "==> Ollama 契约测试"
+echo "==> Ollama contract tests"
 WHITENIGHT_TEST_OLLAMA=1 uv run pytest tests/test_ollama_provider.py -q
 
-echo "==> 路由/文档/权限回归（不依赖真实 Ollama）"
+echo "==> Routing, document, and policy regression tests (no live Ollama)"
 uv run pytest tests/test_routing.py tests/test_documents.py tests/test_tool_executor.py -q
 
 echo "MODEL REGRESSION PASSED"

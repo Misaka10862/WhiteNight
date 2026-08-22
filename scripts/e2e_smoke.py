@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""服务级 E2E 冒烟（阶段 10，非破坏性，使用临时数据目录）。
+"""Run a non-destructive stage 10 service smoke test in a temporary data directory.
 
-默认 DummyProvider；--real-model 使用本机 Ollama qwen3-vl:8b。
-覆盖：健康检查 → 会话/WebSocket 流式聊天 → 记忆提取 → 主动消息状态 → 加密备份。
+Uses DummyProvider by default; --real-model uses local Ollama qwen3-vl:8b.
+Covers health, sessions/WebSocket chat, memory extraction, proactive state, and backups.
 """
 
 from __future__ import annotations

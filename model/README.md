@@ -25,11 +25,17 @@ model/
 
 ```bash
 uv run scripts/validate_training_data.py model/specs/persona_samples.jsonl
+uv run scripts/generate_persona_corpus.py
+uv run scripts/validate_training_data.py --mode candidate --reject-duplicates \
+  --expected-count 600 --manifest model/manifests/persona-v1.json \
+  model/data/candidates/general.jsonl model/data/candidates/adult.jsonl
 uv run scripts/eval_persona.py --model qwen3-vl:8b
 uv run scripts/blind_ab.py run --model-a qwen3-vl:8b --model-b <candidate>
 bash model/scripts/export_to_ollama.sh # dry-run; --run only executes
 ```
 
 - Data specifications: `specs/persona_data_spec.md`; samples (synthetic CC0): `specs/persona_samples.jsonl`.
+- Candidate corpus text remains under ignored `model/data/`; only text-free manifests under
+  `model/manifests/` are committed.
 - Training configuration baseline: `configs/qwen3vl_persona_qlora.yaml` (freeze_vit=true).
 - Blind test results and training run records are not recorded in Git.

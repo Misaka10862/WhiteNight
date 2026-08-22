@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""WhiteNight 诊断（只读、非破坏性）。
+"""Run read-only WhiteNight diagnostics.
 
-检查：数据库完整性/迁移版本/磁盘、Ollama、Codex MCP、Hermes Gateway、
-待审批数、附件占用、最近日志。
-用法：uv run scripts/diagnostics.py [--json]
+Checks database integrity/migrations/disk, Ollama, Codex MCP, Hermes Gateway,
+pending approvals, attachment usage, and recent logs.
+Usage: uv run scripts/diagnostics.py [--json]
 """
 
 from __future__ import annotations

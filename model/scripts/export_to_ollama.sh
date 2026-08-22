@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 将训练好的 LoRA Adapter 合并/量化并导入 Ollama（阶段 9）。
-# 默认 dry-run：只打印将执行的命令。--run 才真正执行。
-# 需要：ms-swift、可用 GPU/内存、Ollama 与量化工具链。
+# Merge, quantize, and import the trained stage 9 LoRA adapter into Ollama.
+# The default is a dry run; pass --run to execute. Requires ms-swift, adequate
+# GPU/RAM, Ollama, and the quantization toolchain.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -11,7 +11,7 @@ MERGED_DIR="${MERGED_DIR:-$RUN_DIR/merged-q8}"
 QUANT_BITS="${QUANT_BITS:-8}"
 MODEL_TAG="${MODEL_TAG:-qwen3-vl-whitenight:persona-v1}"
 
-echo "==> 1. ms-swift 合并并量化（以本机 ms-swift 文档为准）"
+echo "==> 1. Merge and quantize with the installed ms-swift version"
 echo "swift export \\"
 echo "  --ckpt_dir '$CKPT_DIR' \\"
 echo "  --merge_lora true \\"
@@ -19,12 +19,12 @@ echo "  --quant_bits $QUANT_BITS \\"
 echo "  --output_dir '$MERGED_DIR'"
 
 MODELFILE="$RUN_DIR/Modelfile"
-echo "==> 2. Modelfile（目标 $MODELFILE）"
+echo "==> 2. Modelfile target: $MODELFILE"
 echo "FROM $MERGED_DIR"
 echo "PARAMETER temperature 0.7"
 echo "PARAMETER top_p 0.95"
 
-echo "==> 3. 验证（不注入人格 system prompt）"
+echo "==> 3. Evaluate without a resident persona system prompt"
 echo "uv run scripts/eval_persona.py --model '$MODEL_TAG' --eval-file evals/persona/golden.jsonl"
 
 if [[ "${1:-}" == "--run" ]]; then

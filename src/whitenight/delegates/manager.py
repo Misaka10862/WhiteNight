@@ -163,6 +163,7 @@ class DelegateManager:
         session_id: str | None = None,
         cwd: str | None = None,
         task_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> AsyncGenerator[DelegateEvent, None]:
         """创建/续接任务并流式返回事件；终态落在 TaskStore。"""
         provider = self._providers.get(executor)
@@ -209,6 +210,7 @@ class DelegateManager:
                     cwd=cwd,
                     thread_id=thread_id,
                     sandbox="workspace-write" if executor == "codex" else None,
+                    metadata=metadata or {},
                 )
                 async for event in provider.submit(request):
                     if event.type == "result":

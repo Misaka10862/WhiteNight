@@ -1,7 +1,7 @@
 [project]
 name = "whitenight"
 version = "0.1.0"
-description = "WhiteNight（白夜）—— 本地优先的个人 AI 智能体"
+description = "WhiteNight: a local-first personal AI agent"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
@@ -29,6 +29,7 @@ dependencies = [
     "pyyaml>=6.0,<7",
     "sqlalchemy>=2.0.41,<3",
     "uvicorn[standard]>=0.35,<1",
+    "websockets==17.0.1",
 ]
 
 [project.scripts]
@@ -77,9 +78,9 @@ select = [
 ]
 ignore = [
     "E501",
-    "RUF001", # 中文全角逗号
-    "RUF002", # 中文全角冒号
-    "RUF003", # 中文全角分号
+    "RUF001", # Ambiguous full-width punctuation in Chinese product text
+    "RUF002", # Ambiguous full-width punctuation in Chinese product text
+    "RUF003", # Ambiguous full-width punctuation in Chinese product text
 ]
 
 [tool.ruff.lint.isort]

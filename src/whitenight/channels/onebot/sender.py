@@ -74,6 +74,13 @@ class OneBotSender:
                 files={"file": (name, handle, "application/octet-stream")},
             )
 
+    def upload_file(self, target: str, path: str, name: str) -> None:
+        try:
+            user_id = int(target)
+        except ValueError as exc:
+            raise OneBotSendError("QQ 文件目标必须是数字帐号") from exc
+        self.upload_private_file(user_id, path, name)
+
     def _post(
         self,
         endpoint: str,

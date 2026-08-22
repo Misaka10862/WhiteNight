@@ -116,6 +116,22 @@ class ApprovalService:
         编号不可重放；过期、session 不匹配、scope 与要求不一致均拒绝。
         scope=session 的批准会同时建立会话授权，但编号本身同样只消费一次。
         """
+        approved = self.approve(code, session_id=session_id, expected_scope=expected_scope)
+        if not approved.ok or approved.approval_id is None:
+            return approved
+        return self.consume_approved(
+            approved.approval_id,
+            session_id=session_id,
+            expected_scope=expected_scope,
+        )
+
+    def approve(
+        self,
+        code: str,
+        session_id: str | None = None,
+        expected_scope: str = "once",
+    ) -> Resolution:
+        """Approve without consuming; a bound executor consumes it later."""
         now = _now()
         with self._orm() as orm:
             approval = orm.scalar(select(Approval).where(Approval.code == code))
@@ -136,7 +152,7 @@ class ApprovalService:
             if approval.session_id and approval.session_id != session_id:
                 return Resolution(False, "once", "审批编号不属于当前会话")
             approval.status = "approved"
-            approval.used_count = 1
+            approval.used_count = 0
             approval.decided_at = now
             if approval.scope == "session":
                 orm.add(
@@ -148,6 +164,29 @@ class ApprovalService:
                 )
             orm.commit()
             return Resolution(True, approval.scope, "已批准", approval.id)
+
+    def consume_approved(
+        self,
+        approval_id: str,
+        *,
+        session_id: str | None,
+        expected_scope: str,
+    ) -> Resolution:
+        """Atomically consume a previously approved authorization once."""
+        with self._orm() as orm:
+            approval = orm.get(Approval, approval_id)
+            if approval is None:
+                return Resolution(False, expected_scope, "审批记录不存在")
+            if approval.scope != expected_scope:
+                return Resolution(False, expected_scope, "审批范围不匹配")
+            if approval.session_id and approval.session_id != session_id:
+                return Resolution(False, expected_scope, "审批编号不属于当前会话")
+            if approval.status != "approved" or approval.used_count != 0:
+                return Resolution(False, expected_scope, "审批已处理或不可用")
+            approval.status = "consumed"
+            approval.used_count = 1
+            orm.commit()
+            return Resolution(True, approval.scope, "已消费", approval.id)
 
     def has_session_grant(self, session_id: str, tool_name: str) -> bool:
         now = _now()

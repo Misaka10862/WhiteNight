@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""QQ 链路就绪检查（只读）。
+"""Check QQ link readiness without modifying it.
 
-用法：uv run scripts/qq_link_check.py
-检查：NapCat OneBot API、登录状态、owner 配置、WhiteNight 健康与事件端点。
+Usage: uv run scripts/qq_link_check.py
+Checks the NapCat OneBot API/login, owner configuration, WhiteNight health, and event endpoint.
 """
 
 from __future__ import annotations
