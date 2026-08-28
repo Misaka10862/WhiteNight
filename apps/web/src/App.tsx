@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createSession, fetchSessions, fetchStatus } from './api'
+import { createSession, fetchCharacters, fetchSessions, fetchStatus } from './api'
 import ChatPage, { SessionsPage } from './pages/ChatPage'
 import MemoryPage from './pages/MemoryPage'
 import TasksPage from './pages/TasksPage'
@@ -11,12 +11,14 @@ import RulesPage from './pages/RulesPage'
 import ProactivePage from './pages/ProactivePage'
 import LogsPage from './pages/LogsPage'
 import PlaceholderPage from './pages/PlaceholderPage'
+import CharactersPage from './pages/CharactersPage'
 
-type Tab = 'chat' | 'sessions' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'rules' | 'active' | 'logs' | 'backup'
+type Tab = 'chat' | 'sessions' | 'characters' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'rules' | 'active' | 'logs' | 'backup'
 
 const TABS: { id: Tab; label: string; title: string }[] = [
   { id: 'chat', label: '聊天', title: '聊天' },
   { id: 'sessions', label: '会话', title: '会话管理' },
+  { id: 'characters', label: '角色', title: '角色与编排' },
   { id: 'memory', label: '记忆', title: '长期记忆' },
   { id: 'tasks', label: '任务', title: '任务' },
   { id: 'approvals', label: '审批', title: '审批' },
@@ -36,8 +38,9 @@ export default function App() {
 
   const status = useQuery({ queryKey: ['status'], queryFn: fetchStatus })
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
+  const characters = useQuery({ queryKey: ['characters'], queryFn: fetchCharacters })
   const newSession = useMutation({
-    mutationFn: () => createSession(),
+    mutationFn: (payload?: { character_id?: string; greeting_index?: number }) => createSession(payload),
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
       setActiveId(session.id)
@@ -53,7 +56,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeId !== null || !sessions.data || sessions.data.length !== 0 || newSession.isPending) return
-    newSession.mutate()
+    newSession.mutate(undefined)
   }, [activeId, sessions.data, newSession])
 
   return (
@@ -95,7 +98,11 @@ export default function App() {
               sessions={sessions.data ?? []}
               activeId={activeId}
               onSelectSession={(id) => setActiveId(id)}
-              onNewSession={() => newSession.mutate()}
+              characters={characters.data ?? []}
+              onNewSession={(characterId, greetingIndex) => newSession.mutate({
+                character_id: characterId,
+                ...(greetingIndex === undefined ? {} : { greeting_index: greetingIndex }),
+              })}
             />
           )}
           {tab === 'sessions' && (
@@ -108,7 +115,8 @@ export default function App() {
               }}
             />
           )}
-          {tab === 'memory' && <MemoryPage />}
+          {tab === 'characters' && <CharactersPage sessionId={activeId} />}
+          {tab === 'memory' && <MemoryPage characterId={sessions.data?.find((item) => item.id === activeId)?.character_id ?? null} />}
           {tab === 'tasks' && <TasksPage sessionId={activeId} />}
           {tab === 'approvals' && <ApprovalsPage />}
           {tab === 'permissions' && <PermissionsPage />}

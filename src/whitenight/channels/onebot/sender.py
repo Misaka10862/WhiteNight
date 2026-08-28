@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import time
 from pathlib import Path
+from typing import cast
 
 import httpx
 
@@ -79,6 +80,14 @@ class OneBotSender:
         except ValueError as exc:
             raise OneBotSendError("QQ 文件目标必须是数字帐号") from exc
         self.upload_private_file(user_id, path, name)
+
+    def get_file(self, file_id: str) -> dict[str, object]:
+        """Resolve OneBot file metadata without trusting fields from the chat event."""
+        payload = self._post("/get_file", json={"file_id": file_id})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise OneBotSendError("OneBot get_file 返回缺少 data")
+        return cast(dict[str, object], data)
 
     def _post(
         self,

@@ -10,7 +10,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session as OrmSession
 
 from whitenight.channels.types import MessageKind, MessageRecord, MessageRole, SessionSummary
-from whitenight.storage.models import Message, Session
+from whitenight.storage.models import AppMeta, CharacterProfile, Message, Session
 
 
 class SessionNotFoundError(KeyError):
@@ -27,12 +27,36 @@ class SessionStore:
     def _orm(self) -> OrmSession:
         return OrmSession(self._engine, expire_on_commit=False)
 
-    def create_session(self, title: str | None = None) -> SessionSummary:
+    def create_session(
+        self,
+        title: str | None = None,
+        *,
+        character_id: str | None = None,
+        persona_id: str | None = None,
+        greeting: str | None = None,
+    ) -> SessionSummary:
         with self._orm() as orm:
-            session = Session(title=title or "新会话")
+            character_id = character_id or self._meta_value(orm, "default_character_id")
+            persona_id = persona_id or self._meta_value(orm, "default_persona_id")
+            session = Session(
+                title=title or "新会话",
+                character_id=character_id,
+                persona_id=persona_id,
+            )
             orm.add(session)
+            orm.flush()
+            if greeting:
+                orm.add(
+                    Message(
+                        session_id=session.id,
+                        sequence=1,
+                        role="assistant",
+                        kind="text",
+                        content=greeting,
+                    )
+                )
             orm.commit()
-            return self._summary(session, 0)
+            return self._summary(session, 1 if greeting else 0, orm)
 
     def list_sessions(self, limit: int = 50) -> list[SessionSummary]:
         with self._orm() as orm:
@@ -43,7 +67,7 @@ class SessionStore:
                 .order_by(Session.updated_at.desc())
                 .limit(limit)
             ).all()
-            return [self._summary(session, count) for session, count in rows]
+            return [self._summary(session, count, orm) for session, count in rows]
 
     def get_session(self, session_id: str) -> SessionSummary:
         with self._orm() as orm:
@@ -53,7 +77,7 @@ class SessionStore:
             count = orm.scalar(
                 select(func.count(Message.id)).where(Message.session_id == session_id)
             )
-            return self._summary(session, count or 0)
+            return self._summary(session, count or 0, orm)
 
     def list_messages(self, session_id: str) -> list[MessageRecord]:
         with self._orm() as orm:
@@ -83,6 +107,14 @@ class SessionStore:
                 )
                 or 0
             ) + 1
+            had_user = bool(
+                orm.scalar(
+                    select(func.count(Message.id)).where(
+                        Message.session_id == session_id,
+                        Message.role == "user",
+                    )
+                )
+            )
             message = Message(
                 session_id=session_id,
                 sequence=sequence,
@@ -93,8 +125,8 @@ class SessionStore:
                 image_mime=image_mime,
             )
             orm.add(message)
-            # 会话标题：未显式命名时，用首条用户消息的前 24 个字符。
-            if role == "user" and sequence == 1 and session.title == "新会话":
+            # 角色开场可能占 sequence=1；标题仍取首条用户消息。
+            if role == "user" and not had_user and session.title == "新会话":
                 session.title = (content.strip() or "图片消息")[:24] or "新会话"
             session.updated_at = datetime.now(UTC)
             orm.commit()
@@ -111,7 +143,7 @@ class SessionStore:
             count = orm.scalar(
                 select(func.count(Message.id)).where(Message.session_id == session_id)
             )
-            return self._summary(session, count or 0)
+            return self._summary(session, count or 0, orm)
 
     def delete_session(self, session_id: str) -> None:
         """删除会话：级联删除消息，立即从应用移除。正文不进入审计。"""
@@ -152,13 +184,38 @@ class SessionStore:
             parts.append("")
         return "\n".join(parts)
 
-    def _summary(self, session: Session, message_count: int) -> SessionSummary:
+    def set_identity(self, session_id: str, character_id: str, persona_id: str) -> None:
+        with self._orm() as orm:
+            session = orm.get(Session, session_id)
+            if session is None:
+                raise SessionNotFoundError(session_id)
+            session.character_id, session.persona_id = character_id, persona_id
+            session.updated_at = datetime.now(UTC)
+            orm.commit()
+
+    @staticmethod
+    def _meta_value(orm: OrmSession, key: str) -> str | None:
+        row = orm.get(AppMeta, key)
+        return row.value if row else None
+
+    def _summary(
+        self, session: Session, message_count: int, orm: OrmSession | None = None
+    ) -> SessionSummary:
+        character = (
+            orm.get(CharacterProfile, session.character_id)
+            if orm and session.character_id
+            else None
+        )
         return SessionSummary(
             id=session.id,
             title=session.title,
             created_at=session.created_at,
             updated_at=session.updated_at,
             message_count=message_count,
+            character_id=session.character_id,
+            persona_id=session.persona_id,
+            character_name=character.name if character else None,
+            character_avatar_path=character.avatar_path if character else None,
         )
 
     def _record(self, message: Message) -> MessageRecord:

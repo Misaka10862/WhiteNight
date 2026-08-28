@@ -27,7 +27,9 @@ dependencies = [
     "python-docx>=1.2,<2",
     "python-pptx>=1.0,<2",
     "pyyaml>=6.0,<7",
+    "regex>=2025.7,<2027",
     "sqlalchemy>=2.0.41,<3",
+    "tokenizers>=0.21,<1",
     "uvicorn[standard]>=0.35,<1",
     "websockets==17.0.1",
 ]

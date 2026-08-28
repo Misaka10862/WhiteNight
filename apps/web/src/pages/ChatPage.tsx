@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   chatWebSocketUrl,
@@ -7,6 +7,7 @@ import {
   fetchMessages,
   renameSession,
   type ChatEvent,
+  type CharacterRecord,
   type DelegateEvent,
   type MessageRecord,
   type SessionSummary,
@@ -22,11 +23,13 @@ export default function ChatPage({
   activeId,
   onSelectSession,
   onNewSession,
+  characters,
 }: {
   sessions: SessionSummary[]
   activeId: string | null
   onSelectSession: (id: string) => void
-  onNewSession: () => void
+  onNewSession: (characterId: string, greetingIndex?: number) => void
+  characters: CharacterRecord[]
 }) {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
@@ -38,6 +41,16 @@ export default function ChatPage({
   const [toolStatus, setToolStatus] = useState<string | null>(null)
   const [chatError, setChatError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const activeSession = sessions.find((session) => session.id === activeId) ?? null
+  const [newCharacterId, setNewCharacterId] = useState('')
+  const [greeting, setGreeting] = useState('0')
+  useEffect(() => {
+    const fallback = activeSession?.character_id ?? characters[0]?.id ?? ''
+    setNewCharacterId(fallback)
+    setGreeting('0')
+  }, [activeSession?.character_id, characters])
+  const newCharacter = characters.find((item) => item.id === newCharacterId)
+  const greetings = newCharacter ? [newCharacter.card.data.first_mes, ...newCharacter.card.data.alternate_greetings] : []
 
   const messages = useQuery({
     queryKey: ['messages', activeId],
@@ -123,7 +136,7 @@ export default function ChatPage({
   return (
     <div className="chat-layout">
       <aside className="sessions">
-        <button className="new-chat" onClick={onNewSession}>
+        <button className="new-chat" onClick={() => newCharacterId && onNewSession(newCharacterId, greeting === 'none' ? undefined : Number(greeting))}>
           新会话
         </button>
         {(sessions ?? []).map((session) => (
@@ -133,13 +146,19 @@ export default function ChatPage({
             onClick={() => onSelectSession(session.id)}
             title={session.title}
           >
-            <span className="session-title">{session.title}</span>
+            <span className="session-title">{session.title}<small>{session.character_name ?? '角色未知'}</small></span>
             <span className="session-count">{session.message_count}</span>
           </button>
         ))}
       </aside>
 
       <section className="chat" aria-label="聊天">
+        <div className="chat-context-bar">
+          <span><strong>{activeSession?.character_name ?? '未选择角色'}</strong><small>会话角色已锁定</small></span>
+          <label>新角色<select value={newCharacterId} onChange={(event) => { setNewCharacterId(event.target.value); setGreeting('0') }}>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select></label>
+          <label>开场<select value={greeting} onChange={(event) => setGreeting(event.target.value)}><option value="none">无开场</option>{greetings.map((item, index) => <option key={`${index}-${item.slice(0, 12)}`} value={index}>{item || '空开场'}</option>)}</select></label>
+          <button onClick={() => newCharacterId && onNewSession(newCharacterId, greeting === 'none' ? undefined : Number(greeting))}>新建</button>
+        </div>
         <div className="messages">
           {shownMessages.map((message: MessageRecord) => (
             <MessageBubble key={message.id} message={message} />
@@ -218,7 +237,7 @@ export default function ChatPage({
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="和小白说点什么…（Enter 发送，Shift+Enter 换行）"
+            placeholder={`和${activeSession?.character_name ?? '当前角色'}说点什么…`}
             rows={1}
             disabled={disabled}
             aria-label="聊天输入"

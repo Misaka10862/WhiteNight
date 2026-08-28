@@ -13,6 +13,7 @@ from whitenight.agent.context import load_soul
 from whitenight.config import Settings
 from whitenight.memory.service import MemoryService
 from whitenight.models.base import ModelProvider, ProviderMessage
+from whitenight.personality.store import PersonalityStore
 from whitenight.scheduler.poisson import (
     local_naive_to_utc,
     next_candidate,
@@ -64,12 +65,14 @@ class ProactiveService:
         memory: MemoryService,
         sender: ProactiveSender,
         settings: Settings,
+        personalities: PersonalityStore | None = None,
     ) -> None:
         self._store = store
         self._provider = provider
         self._memory = memory
         self._sender = sender
         self._settings = settings
+        self._personalities = personalities
 
     def status(self) -> ProactiveStatus:
         return self._store.status()
@@ -149,8 +152,16 @@ class ProactiveService:
 
     async def _compose_message(self) -> str | None:
         try:
+            character_id = None
             soul = load_soul(self._settings.soul_file)
-            hits = self._memory.retrieve("主人 偏好 称呼 喜好 最近 纪念", limit=6)
+            if self._personalities is not None:
+                character_id = self._personalities.default_character_id()
+                soul = (
+                    self._personalities.get_character(character_id).card.data.system_prompt or soul
+                )
+            hits = self._memory.retrieve(
+                "主人 偏好 称呼 喜好 最近 纪念", limit=6, character_id=character_id
+            )
             memory_lines = "\n".join(f"- {hit.content}" for hit in hits[:6]) or "（暂无长期记忆）"
             prompt = (
                 f"{soul}\n\n# 主动消息\n"

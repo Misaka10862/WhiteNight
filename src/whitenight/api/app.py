@@ -17,7 +17,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from whitenight import __version__
 from whitenight.agent.context import load_soul
@@ -58,6 +58,10 @@ from whitenight.memory.types import (
 from whitenight.models.base import ModelProvider
 from whitenight.models.ollama import OllamaProvider
 from whitenight.models.openai import OpenAIProvider
+from whitenight.personality.compiler import PromptCompiler
+from whitenight.personality.store import PersonalityNotFoundError, PersonalityStore
+from whitenight.personality.token_counter import build_token_counter
+from whitenight.personality.types import CharacterCard, LorebookData, PromptBlock
 from whitenight.policy.approvals import ApprovalService, SessionGrantRecord
 from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import PolicyEngine
@@ -65,6 +69,7 @@ from whitenight.routing.engine import OllamaRoutingRouter, RoutingEngine
 from whitenight.routing.rules import RuleRouter
 from whitenight.scheduler import LogSender, NullSender, ProactiveService, ProactiveStore
 from whitenight.scheduler.types import PauseRequest, ProactiveConfig, ProactiveStatus
+from whitenight.storage.attachments import image_path_to_data_url, save_image_data_url
 from whitenight.storage.engine import backend_of, build_engine, ping, resolve_database_key
 from whitenight.storage.migrate import upgrade_to_head
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
@@ -81,6 +86,7 @@ from whitenight.tools import (
     ScreenshotTool,
     ToolExecutor,
     ToolRegistry,
+    VolcGlobalSearchProvider,
     WebFetchTool,
     WebSearchTool,
 )
@@ -111,7 +117,75 @@ class ModelKeepAliveUpdate(BaseModel):
     keep_alive: str
 
 
+class CharacterImport(BaseModel):
+    card: CharacterCard
+    avatar_data_url: str | None = Field(default=None, max_length=16_000_000)
+
+
+class PersonaUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=64_000)
+
+
+class PromptProfileUpdate(BaseModel):
+    blocks: list[PromptBlock] = Field(default_factory=list, max_length=200)
+
+
+class LorebookCreate(BaseModel):
+    data: LorebookData
+    globally_enabled: bool = False
+    character_id: str | None = None
+
+
+class PromptPreviewRequest(BaseModel):
+    text: str = Field(default="", max_length=64_000)
+
+
+class TokenizerPathUpdate(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+
+
 _MODEL_KEEP_ALIVE_OPTIONS = ("-1", "5m", "30m", "1h", "6h", "12h")
+
+
+def _embedded_lorebook(card: CharacterCard) -> LorebookData | None:
+    raw = card.data.character_book
+    if not isinstance(raw, dict) or not isinstance(raw.get("entries"), list):
+        return None
+    entries: list[dict[str, object]] = []
+    for index, item in enumerate(raw["entries"]):
+        if not isinstance(item, dict):
+            continue
+        raw_extensions = item.get("extensions")
+        extensions: dict[str, object] = (
+            {str(key): value for key, value in raw_extensions.items()}
+            if isinstance(raw_extensions, dict)
+            else {}
+        )
+        position = item.get("position", "before_char")
+        entries.append(
+            {
+                "id": str(item.get("id", item.get("uid", index))),
+                "comment": str(item.get("name", item.get("comment", ""))),
+                "content": str(item.get("content", "")),
+                "keys": item.get("keys", item.get("key", [])),
+                "secondary_keys": item.get("secondary_keys", item.get("keysecondary", [])),
+                "enabled": bool(item.get("enabled", not item.get("disable", False))),
+                "constant": bool(item.get("constant", False)),
+                "position": "before" if position in {"before_char", "before", 0} else "after",
+                "order": int(item.get("insertion_order") or item.get("order") or 100),
+                "probability": float(str(extensions.get("probability") or 100)) / 100.0,
+                "depth": int(str(extensions.get("depth") or 4)),
+                "extensions": extensions,
+            }
+        )
+    return LorebookData(
+        name=str(raw.get("name") or f"{card.data.name} 的世界书"),
+        entries=entries,  # type: ignore[arg-type]
+        extensions={str(key): value for key, value in raw["extensions"].items()}
+        if isinstance(raw.get("extensions"), dict)
+        else {},
+    )
 
 
 def _build_memory_extractor(settings: Settings, provider: ModelProvider) -> MemoryExtractor:
@@ -192,6 +266,13 @@ def create_app(
         approvals = ApprovalService(engine)
         policy = PolicyEngine()
         onebot_sender = OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars)
+        volc_search = VolcGlobalSearchProvider(
+            lambda: credential_store.get(
+                settings.keychain_service, settings.volc_search_api_key_account
+            ),
+            endpoint=settings.volc_search_endpoint,
+            timeout_s=settings.volc_search_timeout_s,
+        )
         tool_registry = ToolRegistry(
             [
                 FileFindTool(),
@@ -203,8 +284,8 @@ def create_app(
                 DocumentParseTool(),
                 ArchiveListTool(),
                 ScreenshotTool(),
-                WebSearchTool(),
-                WebFetchTool(),
+                WebSearchTool(volc_search),
+                WebFetchTool(volc_search),
                 ChannelFileSendTool(settings.qq_file_send_max_bytes),
             ]
         )
@@ -217,6 +298,14 @@ def create_app(
             else NullEmbeddingProvider()
         )
         memory_service = MemoryService(MemoryStore(engine), extractor, embedding_provider, audit)
+        personality_store = PersonalityStore(engine)
+        prompt_compiler = PromptCompiler(
+            personality_store,
+            memory_service,
+            build_token_counter(settings.model_tokenizer_path),
+            settings.model_context_tokens,
+            settings.model_max_output_tokens,
+        )
         proactive_store = ProactiveStore(engine)
         proactive_sender: LogSender | NullSender | OneBotSender
         if settings.proactive_sender == "qq" and settings.qq_owner_ids:
@@ -228,7 +317,12 @@ def create_app(
                 else NullSender()
             )
         proactive_service = ProactiveService(
-            proactive_store, provider, memory_service, proactive_sender, settings
+            proactive_store,
+            provider,
+            memory_service,
+            proactive_sender,
+            settings,
+            personality_store,
         )
         proactive_stop = asyncio.Event()
         proactive_task = asyncio.create_task(proactive_service.run_forever(proactive_stop))
@@ -241,6 +335,7 @@ def create_app(
             ),
             settings.hermes_startup_timeout_s,
             settings.hermes_managed,
+            settings.hermes_inference_base_url,
         )
         hermes_adapter = ManagedHermesGatewayAdapter(
             hermes_process,
@@ -275,6 +370,8 @@ def create_app(
             pending_tools,
             policy,
             onebot_sender,
+            prompt_compiler,
+            personality_store,
         )
         channel_sessions = ChannelSessionStore(engine, store)
         onebot_adapter = OneBotAdapter(
@@ -284,10 +381,13 @@ def create_app(
             chat_service,
             approvals,
             onebot_sender,
+            personality_store,
         )
         _app.state.engine = engine
         _app.state.store = store
         _app.state.memory_service = memory_service
+        _app.state.personality_store = personality_store
+        _app.state.prompt_compiler = prompt_compiler
         _app.state.approvals = approvals
         _app.state.audit = audit
         _app.state.policy = policy
@@ -358,7 +458,26 @@ def create_app(
     @app.post("/api/v1/sessions", response_model=SessionSummary)
     async def create_session(payload: SessionCreate) -> SessionSummary:
         store: SessionStore = app.state.store
-        return store.create_session(payload.title)
+        personalities: PersonalityStore = app.state.personality_store
+        character_id = payload.character_id or personalities.default_character_id()
+        persona_id = payload.persona_id or personalities.default_persona_id()
+        try:
+            character = personalities.get_character(character_id)
+            persona = personalities.get_persona()
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="角色或 Persona 不存在") from exc
+        greetings = [character.card.data.first_mes, *character.card.data.alternate_greetings]
+        greeting: str | None = None
+        if payload.greeting_index is not None:
+            if payload.greeting_index >= len(greetings):
+                raise HTTPException(status_code=400, detail="开场消息索引越界")
+            greeting = greetings[payload.greeting_index]
+        return store.create_session(
+            payload.title,
+            character_id=character_id,
+            persona_id=persona_id or persona.id,
+            greeting=greeting,
+        )
 
     @app.get("/api/v1/sessions", response_model=list[SessionSummary])
     async def list_sessions() -> list[SessionSummary]:
@@ -508,7 +627,13 @@ def create_app(
     async def model_config() -> dict[str, object]:
         provider = app.state.chat_service.provider
         keep_alive = getattr(provider, "keep_alive", settings.ollama_keep_alive)
-        return {"ollama_keep_alive": keep_alive, "options": list(_MODEL_KEEP_ALIVE_OPTIONS)}
+        return {
+            "ollama_keep_alive": keep_alive,
+            "options": list(_MODEL_KEEP_ALIVE_OPTIONS),
+            "tokenizer_path": str(settings.model_tokenizer_path or ""),
+            "tokenizer_available": app.state.prompt_compiler.tokenizer_available,
+            "context_tokens": settings.model_context_tokens,
+        }
 
     @app.put("/api/v1/model/config")
     async def update_model_config(payload: ModelKeepAliveUpdate) -> dict[str, object]:
@@ -533,6 +658,253 @@ def create_app(
         data["ollama_keep_alive"] = payload.keep_alive
         path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=True), encoding="utf-8")
         return {"ollama_keep_alive": payload.keep_alive, "persisted": True}
+
+    @app.put("/api/v1/model/tokenizer")
+    async def update_tokenizer(payload: TokenizerPathUpdate) -> dict[str, object]:
+        path = Path(payload.path).expanduser().resolve()
+        if not path.is_file() or path.name != "tokenizer.json":
+            raise HTTPException(status_code=400, detail="请选择存在的 tokenizer.json 文件")
+        try:
+            counter = build_token_counter(path)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"tokenizer.json 无法加载：{exc}") from exc
+        settings.model_tokenizer_path = path
+        app.state.prompt_compiler.set_token_counter(counter)
+        config_path = Path(os.environ.get("WHITENIGHT_CONFIG", str(DEFAULT_CONFIG_PATH)))
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        data: dict[str, object] = {}
+        if config_path.exists():
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(loaded, dict):
+                raise HTTPException(status_code=500, detail="配置文件格式损坏")
+            data = loaded
+            backup = config_path.with_suffix(f".bak-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
+            shutil.copy2(config_path, backup)
+        data["model_tokenizer_path"] = str(path)
+        config_path.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=True), encoding="utf-8"
+        )
+        return {"path": str(path), "available": counter.available, "persisted": True}
+
+    # ---- 角色、Persona、世界书与 Prompt 编排 --------------------------
+
+    @app.get("/api/v1/characters")
+    async def list_characters(include_archived: bool = False) -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return [item.model_dump(mode="json") for item in service.list_characters(include_archived)]
+
+    @app.post("/api/v1/characters/import")
+    async def import_character(payload: CharacterImport) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        avatar_path = None
+        if payload.avatar_data_url:
+            avatar_path, _mime = save_image_data_url(
+                payload.avatar_data_url,
+                settings.data_dir / "characters",
+                settings.max_image_bytes,
+            )
+        character = service.create_character(payload.card, avatar_path=avatar_path)
+        embedded = _embedded_lorebook(payload.card)
+        if embedded is not None:
+            lorebook = service.create_lorebook(embedded)
+            service.attach_lorebook(character.id, lorebook.id)
+        return character.model_dump(mode="json")
+
+    @app.get("/api/v1/characters/{character_id}")
+    async def get_character(character_id: str) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.get_character(character_id).model_dump(mode="json")
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="角色不存在") from exc
+
+    @app.put("/api/v1/characters/{character_id}")
+    async def update_character(character_id: str, card: CharacterCard) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.update_character(character_id, card).model_dump(mode="json")
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="角色不存在") from exc
+
+    @app.post("/api/v1/characters/{character_id}/archive", status_code=204)
+    async def archive_character(character_id: str) -> None:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            service.archive_character(character_id)
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="角色不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/characters/{character_id}/revisions")
+    async def character_revisions(character_id: str) -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return service.list_character_revisions(character_id)
+
+    @app.post("/api/v1/characters/{character_id}/revisions/{revision_id}/restore")
+    async def restore_character_revision(character_id: str, revision_id: str) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.restore_character_revision(character_id, revision_id).model_dump(
+                mode="json"
+            )
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="角色修订不存在") from exc
+
+    @app.get("/api/v1/characters/{character_id}/export")
+    async def export_character(character_id: str) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            character = service.get_character(character_id)
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="角色不存在") from exc
+        avatar = None
+        if character.avatar_path:
+            suffix = Path(character.avatar_path).suffix.lower()
+            mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+            }.get(suffix)
+            if mime:
+                avatar = image_path_to_data_url(
+                    settings.data_dir / "characters", character.avatar_path, mime
+                )
+        return {"card": character.card.model_dump(mode="json"), "avatar_data_url": avatar}
+
+    @app.get("/api/v1/persona")
+    async def get_persona() -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        return service.get_persona().model_dump(mode="json")
+
+    @app.put("/api/v1/persona")
+    async def update_persona(payload: PersonaUpdate) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        return service.update_persona(payload.name, payload.description).model_dump(mode="json")
+
+    @app.get("/api/v1/persona/revisions")
+    async def persona_revisions() -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return service.list_persona_revisions()
+
+    @app.post("/api/v1/persona/revisions/{revision_id}/restore")
+    async def restore_persona_revision(revision_id: str) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.restore_persona_revision(revision_id).model_dump(mode="json")
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Persona 修订不存在") from exc
+
+    @app.get("/api/v1/prompt-profiles/{character_id}")
+    async def get_prompt_profile(character_id: str) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.get_prompt_profile(character_id).model_dump(mode="json")
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Prompt 配置不存在") from exc
+
+    @app.put("/api/v1/prompt-profiles/{character_id}")
+    async def update_prompt_profile(
+        character_id: str, payload: PromptProfileUpdate
+    ) -> dict[str, object]:
+        if any(block.id in {"kernel", "runtime"} for block in payload.blocks):
+            raise HTTPException(status_code=400, detail="固定安全模块不能由自定义 Prompt 覆盖")
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.update_prompt_profile(character_id, payload.blocks).model_dump(
+                mode="json"
+            )
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Prompt 配置不存在") from exc
+
+    @app.get("/api/v1/prompt-profiles/{character_id}/revisions")
+    async def prompt_profile_revisions(character_id: str) -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return service.list_prompt_revisions(character_id)
+
+    @app.post("/api/v1/prompt-profiles/{character_id}/revisions/{revision_id}/restore")
+    async def restore_prompt_profile_revision(
+        character_id: str, revision_id: str
+    ) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.restore_prompt_revision(character_id, revision_id).model_dump(
+                mode="json"
+            )
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Prompt 修订不存在") from exc
+
+    @app.get("/api/v1/lorebooks")
+    async def list_lorebooks(include_archived: bool = False) -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return [item.model_dump(mode="json") for item in service.list_lorebooks(include_archived)]
+
+    @app.post("/api/v1/lorebooks")
+    async def create_lorebook(payload: LorebookCreate) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        result = service.create_lorebook(payload.data, payload.globally_enabled)
+        if payload.character_id:
+            service.attach_lorebook(payload.character_id, result.id)
+        return result.model_dump(mode="json")
+
+    @app.put("/api/v1/lorebooks/{lorebook_id}")
+    async def update_lorebook(lorebook_id: str, data: LorebookData) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.update_lorebook(lorebook_id, data).model_dump(mode="json")
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="世界书不存在") from exc
+
+    @app.post("/api/v1/lorebooks/{lorebook_id}/archive", status_code=204)
+    async def archive_lorebook(lorebook_id: str) -> None:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            service.archive_lorebook(lorebook_id)
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="世界书不存在") from exc
+
+    @app.get("/api/v1/lorebooks/{lorebook_id}/revisions")
+    async def lorebook_revisions(lorebook_id: str) -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return service.list_lorebook_revisions(lorebook_id)
+
+    @app.post("/api/v1/lorebooks/{lorebook_id}/revisions/{revision_id}/restore")
+    async def restore_lorebook_revision(lorebook_id: str, revision_id: str) -> dict[str, object]:
+        service: PersonalityStore = app.state.personality_store
+        try:
+            return service.restore_lorebook_revision(lorebook_id, revision_id).model_dump(
+                mode="json"
+            )
+        except PersonalityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="世界书修订不存在") from exc
+
+    @app.post("/api/v1/sessions/{session_id}/prompt-preview")
+    async def prompt_preview(session_id: str, payload: PromptPreviewRequest) -> dict[str, object]:
+        store: SessionStore = app.state.store
+        history = store.list_messages(session_id)
+        if payload.text:
+            history.append(
+                MessageRecord(
+                    id="preview",
+                    session_id=session_id,
+                    sequence=max((item.sequence for item in history), default=0) + 1,
+                    role="user",
+                    content=payload.text,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        compiler: PromptCompiler = app.state.prompt_compiler
+        _messages, preview, _trace = compiler.compile(
+            session_id, history, payload.text, persist_trace=False
+        )
+        return preview.model_dump(mode="json")
+
+    @app.get("/api/v1/generation-traces")
+    async def generation_traces(session_id: str, limit: int = 20) -> list[dict[str, object]]:
+        service: PersonalityStore = app.state.personality_store
+        return service.list_traces(session_id, min(max(limit, 1), 100))
 
     @app.get("/api/v1/system/health")
     async def system_health() -> dict[str, object]:
@@ -585,13 +957,18 @@ def create_app(
     # ---- 长期记忆（阶段 4） --------------------------------------------
 
     @app.get("/api/v1/memory/facts", response_model=list[FactRecord])
-    async def list_facts() -> list[FactRecord]:
+    async def list_facts(character_id: str | None = None) -> list[FactRecord]:
         memory: MemoryService = app.state.memory_service
-        return memory.list_facts()
+        personalities: PersonalityStore = app.state.personality_store
+        return memory.list_facts(character_id or personalities.default_character_id())
 
     @app.post("/api/v1/memory/facts", response_model=FactRecord)
     async def upsert_fact(payload: FactUpsert) -> FactRecord:
         memory: MemoryService = app.state.memory_service
+        if payload.character_id is None:
+            payload = payload.model_copy(
+                update={"character_id": app.state.personality_store.default_character_id()}
+            )
         return memory.upsert_fact(payload)
 
     @app.put("/api/v1/memory/facts/{fact_id}", response_model=FactRecord)
@@ -619,13 +996,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="记忆不存在") from exc
 
     @app.get("/api/v1/memory/episodes", response_model=list[EpisodeRecord])
-    async def list_episodes() -> list[EpisodeRecord]:
+    async def list_episodes(character_id: str | None = None) -> list[EpisodeRecord]:
         memory: MemoryService = app.state.memory_service
-        return memory.list_episodes()
+        personalities: PersonalityStore = app.state.personality_store
+        return memory.list_episodes(character_id or personalities.default_character_id())
 
     @app.post("/api/v1/memory/episodes", response_model=EpisodeRecord)
     async def add_episode(payload: EpisodeCreate) -> EpisodeRecord:
         memory: MemoryService = app.state.memory_service
+        if payload.character_id is None:
+            payload = payload.model_copy(
+                update={"character_id": app.state.personality_store.default_character_id()}
+            )
         return memory.add_episode(payload)
 
     @app.delete("/api/v1/memory/episodes/{episode_id}", status_code=204)
@@ -641,14 +1023,24 @@ def create_app(
         memory: MemoryService = app.state.memory_service
         store: SessionStore = app.state.store
         messages = store.list_messages(payload.session_id)
-        return await memory.extract_and_store(messages, payload.session_id)
+        character_id, _persona_id = app.state.personality_store.session_identity(payload.session_id)
+        return await memory.extract_and_store(
+            messages, payload.session_id, character_id=character_id
+        )
 
     @app.get("/api/v1/memory/retrieve", response_model=list[MemoryHit])
     async def retrieve_memory(
-        query: str = Query(min_length=1, max_length=200), limit: int = Query(default=8, ge=1, le=20)
+        query: str = Query(min_length=1, max_length=200),
+        limit: int = Query(default=8, ge=1, le=20),
+        character_id: str | None = None,
     ) -> list[MemoryHit]:
         memory: MemoryService = app.state.memory_service
-        return memory.retrieve(query, limit=limit)
+        personalities: PersonalityStore = app.state.personality_store
+        return memory.retrieve(
+            query,
+            limit=limit,
+            character_id=character_id or personalities.default_character_id(),
+        )
 
     @app.get("/api/v1/memory/export", response_class=PlainTextResponse)
     async def export_memory(fmt: str = Query(default="jsonl", pattern="^(jsonl|markdown)$")) -> str:

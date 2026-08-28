@@ -14,10 +14,10 @@ import {
   type MemoryHit,
 } from '../api'
 
-export default function MemoryPage() {
+export default function MemoryPage({ characterId }: { characterId: string | null }) {
   const queryClient = useQueryClient()
-  const facts = useQuery({ queryKey: ['facts'], queryFn: fetchFacts })
-  const episodes = useQuery({ queryKey: ['episodes'], queryFn: fetchEpisodes })
+  const facts = useQuery({ queryKey: ['facts', characterId], queryFn: () => fetchFacts(characterId) })
+  const episodes = useQuery({ queryKey: ['episodes', characterId], queryFn: () => fetchEpisodes(characterId) })
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<MemoryHit[]>([])
   const [newKey, setNewKey] = useState('')
@@ -26,9 +26,9 @@ export default function MemoryPage() {
   const [error, setError] = useState<string | null>(null)
 
   const addFact = useMutation({
-    mutationFn: () => createFact({ key: newKey, value: newValue }),
+    mutationFn: () => createFact({ key: newKey, value: newValue, character_id: characterId }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['facts'] })
+      queryClient.invalidateQueries({ queryKey: ['facts', characterId] })
       setNewKey('')
       setNewValue('')
     },
@@ -47,7 +47,7 @@ export default function MemoryPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['facts'] }),
   })
   const addEpisode = useMutation({
-    mutationFn: () => createEpisode({ content: newEpisode }),
+    mutationFn: () => createEpisode({ content: newEpisode, character_id: characterId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['episodes'] })
       setNewEpisode('')
@@ -75,7 +75,7 @@ export default function MemoryPage() {
             onSubmit={async (event) => {
               event.preventDefault()
               if (!query.trim()) return
-              setHits(await retrieveMemory(query))
+              setHits(await retrieveMemory(query, characterId))
             }}
           >
             <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="记忆检索" />

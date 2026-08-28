@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from sqlalchemy import Engine
 
@@ -21,10 +22,14 @@ from whitenight.storage.sessions import SessionStore
 class FakeCodex:
     name = "codex"
 
+    def __init__(self) -> None:
+        self.last_request: DelegationRequest | None = None
+
     async def health(self) -> dict[str, object]:
         return {"ok": True}
 
     async def submit(self, request: DelegationRequest) -> AsyncGenerator[DelegateEvent, None]:
+        self.last_request = request
         yield DelegateEvent(task_id=request.task_id, executor="codex", type="started", label="开始")
         yield DelegateEvent(
             task_id=request.task_id,
@@ -68,7 +73,8 @@ def _service(engine: Engine, settings: Settings, provider) -> tuple[ChatService,
 
 
 def test_codex_delegation_streams_and_persists(engine: Engine, settings: Settings) -> None:
-    service, store = _service(engine, settings, FakeCodex())
+    provider = FakeCodex()
+    service, store = _service(engine, settings, provider)
     session = store.create_session()
     events = _collect(
         service.stream_reply(ChatRequest(session_id=session.id, text="帮我修一下这个 bug"))
@@ -81,6 +87,31 @@ def test_codex_delegation_streams_and_persists(engine: Engine, settings: Setting
     messages = store.list_messages(session.id)
     assert [m.role for m in messages] == ["user", "assistant"]
     assert TaskStore(engine).list()[0].status == "succeeded"
+    assert provider.last_request is not None
+    assert provider.last_request.cwd == str(Path.cwd().resolve())
+
+
+def test_delegation_includes_recent_verified_qq_attachment(
+    engine: Engine, settings: Settings
+) -> None:
+    provider = FakeCodex()
+    service, store = _service(engine, settings, provider)
+    session = store.create_session()
+    attachment = settings.data_dir / "qq_files" / "received-report.docx"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_bytes(b"docx")
+    store.add_message(
+        session.id,
+        "user",
+        f"[QQ 文件] report.docx 已保存到 {attachment}",
+    )
+
+    _collect(
+        service.stream_reply(ChatRequest(session_id=session.id, text="让 Codex 处理我刚才发的文件"))
+    )
+
+    assert provider.last_request is not None
+    assert f"最近收到的 QQ 附件绝对路径：{attachment.resolve()}" in provider.last_request.prompt
 
 
 def test_delegate_failure_does_not_break_session(engine: Engine, settings: Settings) -> None:

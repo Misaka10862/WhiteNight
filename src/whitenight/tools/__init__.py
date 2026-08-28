@@ -14,7 +14,7 @@ from whitenight.tools.files import (
     FileWriteTool,
 )
 from whitenight.tools.screen import ScreenshotTool
-from whitenight.tools.web import WebFetchTool, WebSearchTool
+from whitenight.tools.web import VolcGlobalSearchProvider, WebFetchTool, WebSearchTool
 
 __all__ = [
     "ArchiveListTool",
@@ -33,6 +33,7 @@ __all__ = [
     "ToolExecutor",
     "ToolRegistry",
     "ToolResult",
+    "VolcGlobalSearchProvider",
     "WebFetchTool",
     "WebSearchTool",
 ]

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -44,6 +44,8 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
+    character_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    persona_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -166,6 +168,8 @@ class ProfileFact(Base):
     __table_args__ = (Index("ix_profile_facts_key", "key"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    character_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    owner_namespace: Mapped[str] = mapped_column(String(64), default="local-user", nullable=False)
     key: Mapped[str] = mapped_column(String(200), nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
@@ -189,6 +193,8 @@ class EpisodicMemory(Base):
     __tablename__ = "episodic_memories"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    character_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    owner_namespace: Mapped[str] = mapped_column(String(64), default="local-user", nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source_message_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
@@ -281,6 +287,173 @@ class ChannelSession(Base):
     owner_key: Mapped[str] = mapped_column(String(64), nullable=False)
     session_id: Mapped[str] = mapped_column(String(36), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class CharacterProfile(Base):
+    """Stable character identity; edits create revisions and advance active_revision_id."""
+
+    __tablename__ = "character_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    active_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    avatar_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    is_default: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class CharacterRevision(Base):
+    __tablename__ = "character_revisions"
+    __table_args__ = (UniqueConstraint("character_id", "revision", name="uq_character_rev"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    character_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    card_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PersonaProfile(Base):
+    __tablename__ = "persona_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class PromptProfile(Base):
+    __tablename__ = "prompt_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    character_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    blocks_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class PersonaRevision(Base):
+    __tablename__ = "persona_revisions"
+    __table_args__ = (UniqueConstraint("persona_id", "revision", name="uq_persona_rev"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    persona_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PromptProfileRevision(Base):
+    __tablename__ = "prompt_profile_revisions"
+    __table_args__ = (UniqueConstraint("profile_id", "revision", name="uq_prompt_profile_rev"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    profile_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    blocks_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Lorebook(Base):
+    __tablename__ = "lorebooks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    book_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    globally_enabled: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class LorebookRevision(Base):
+    __tablename__ = "lorebook_revisions"
+    __table_args__ = (UniqueConstraint("lorebook_id", "revision", name="uq_lorebook_rev"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    lorebook_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    book_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class CharacterLorebook(Base):
+    __tablename__ = "character_lorebooks"
+    __table_args__ = (UniqueConstraint("character_id", "lorebook_id", name="uq_char_lore"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    character_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    lorebook_id: Mapped[str] = mapped_column(String(36), nullable=False)
+
+
+class SessionLorebook(Base):
+    __tablename__ = "session_lorebooks"
+    __table_args__ = (UniqueConstraint("session_id", "lorebook_id", name="uq_session_lore"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    lorebook_id: Mapped[str] = mapped_column(String(36), nullable=False)
+
+
+class WorldEffectState(Base):
+    __tablename__ = "world_effect_states"
+    __table_args__ = (UniqueConstraint("session_id", "entry_key", name="uq_world_effect"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    entry_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    sticky_until: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cooldown_until: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    delayed_until: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class GenerationTrace(Base):
+    __tablename__ = "generation_traces"
+    __table_args__ = (Index("ix_generation_traces_session", "session_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    assistant_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    character_revision_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    prompt_profile_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class MemoryExtractionCheckpoint(Base):
+    __tablename__ = "memory_extraction_checkpoints"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )

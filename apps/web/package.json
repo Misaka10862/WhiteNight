@@ -12,6 +12,9 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.81.4",
+    "png-chunk-text": "1.0.0",
+    "png-chunks-encode": "1.0.0",
+    "png-chunks-extract": "1.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

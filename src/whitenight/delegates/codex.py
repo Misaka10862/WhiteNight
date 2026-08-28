@@ -83,7 +83,12 @@ class CodexMcpClient:
                 else:
                     future.set_result(message.get("result", {}))
 
-    async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
         if self._process is None or self._process.stdin is None:
             raise DelegateError("Codex MCP 客户端未启动")
         request_id = self._next_id
@@ -93,7 +98,13 @@ class CodexMcpClient:
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         self._process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode())
         await self._process.stdin.drain()
-        return await asyncio.wait_for(future, timeout=self._startup_timeout_s)
+        try:
+            return await asyncio.wait_for(
+                future,
+                timeout=self._startup_timeout_s if timeout_s is None else timeout_s,
+            )
+        finally:
+            self._pending.pop(request_id, None)
 
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
         if self._process is None or self._process.stdin is None:
@@ -111,12 +122,19 @@ class CodexMcpClient:
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = await asyncio.wait_for(
-                self._request("tools/call", {"name": name, "arguments": arguments}),
-                timeout=self._timeout_s,
+            result = await self._request(
+                "tools/call",
+                {"name": name, "arguments": arguments},
+                timeout_s=self._timeout_s,
             )
         except TimeoutError as exc:
             raise DelegateError("Codex 任务超时") from exc
+        if result.get("isError") is True:
+            detail, _ = _extract_codex_result(result)
+            message = detail or "Codex MCP 工具返回失败"
+            if any(marker in message.lower() for marker in ("403", "401", "cloudflare")):
+                raise DelegateUnavailableError(message)
+            raise DelegateError(message)
         return result
 
     async def close(self) -> None:
@@ -210,10 +228,32 @@ class CodexAdapter:
 
 
 def _extract_codex_result(result: dict[str, Any]) -> tuple[str, str | None]:
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        content = structured.get("content")
+        thread_id = structured.get("threadId")
+        return (
+            content if isinstance(content, str) else "",
+            thread_id if isinstance(thread_id, str) else None,
+        )
+
     text_parts: list[str] = []
     for item in result.get("content", []):
         if isinstance(item, dict) and item.get("type") == "text":
-            text_parts.append(str(item.get("text", "")))
+            text = str(item.get("text", ""))
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                text_parts.append(text)
+            else:
+                if isinstance(payload, dict) and isinstance(payload.get("content"), str):
+                    text_parts.append(payload["content"])
+                    if not isinstance(result.get("threadId"), str) and isinstance(
+                        payload.get("threadId"), str
+                    ):
+                        result = {**result, "threadId": payload["threadId"]}
+                else:
+                    text_parts.append(text)
     thread_id = None
     if isinstance(result.get("threadId"), str):
         thread_id = result["threadId"]

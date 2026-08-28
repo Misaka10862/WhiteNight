@@ -12,7 +12,10 @@ import os
 import shutil
 import subprocess
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
 from pydantic import Field
 
@@ -56,15 +59,38 @@ class FileReadTool:
 
 
 class FileFindParams(ToolParameters):
-    names: list[str] = Field(min_length=1, max_length=20, description="要查找的精确文件名")
+    names: list[str] = Field(
+        min_length=1,
+        max_length=20,
+        description="要查找的文件名或文件名片段；不要包含目录路径",
+    )
     root: str | None = Field(default=None, description="绝对搜索根目录；默认当前用户主目录")
+    recursive: bool = Field(default=True, description="是否递归搜索子目录")
+    match_mode: Literal["auto", "exact", "fuzzy"] = Field(
+        default="auto",
+        description="auto 先精确匹配，未命中的名称再模糊匹配",
+    )
+    similarity_threshold: float = Field(
+        default=0.68,
+        ge=0.4,
+        le=1.0,
+        description="模糊匹配最低相似度",
+    )
+    expected_count: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="用户明确要求的文件数量；默认等于 names 的数量",
+    )
     max_results: int = Field(default=100, ge=1, le=500)
     timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
 
 
 class FileFindTool:
     name = "file.find"
-    description = "按一个或多个精确文件名查找本机文件；默认搜索当前用户主目录"
+    description = (
+        "递归查找一个或多个本机文件；支持精确和模糊文件名匹配，并报告候选数量是否需要用户确认"
+    )
     risk = RiskLevel.READ_ONLY
 
     def validate(self, params: dict[str, object]) -> FileFindParams:
@@ -77,12 +103,13 @@ class FileFindTool:
         if not root.is_dir():
             return ToolResult.failure("文件查找失败", f"搜索根目录不存在：{root}")
 
-        wanted = {name.casefold() for name in params.names if Path(name).name == name}
-        if len(wanted) != len(params.names):
+        queries = list(dict.fromkeys(name.strip() for name in params.names if name.strip()))
+        if len(queries) != len(params.names) or any(Path(name).name != name for name in queries):
             return ToolResult.failure("文件查找失败", "names 只能包含文件名，不能包含路径")
 
         deadline = time.monotonic() + params.timeout_seconds
-        matches: list[Path] = []
+        exact_matches: dict[str, list[Path]] = {query: [] for query in queries}
+        fuzzy_matches: dict[str, list[tuple[float, Path]]] = {query: [] for query in queries}
         denied = 0
         timed_out = False
 
@@ -96,26 +123,59 @@ class FileFindTool:
             if time.monotonic() >= deadline:
                 timed_out = True
                 break
-            dirs[:] = [name for name in dirs if not Path(directory, name).is_symlink()]
+            dirs[:] = (
+                [name for name in dirs if not Path(directory, name).is_symlink()]
+                if params.recursive
+                else []
+            )
             for index, filename in enumerate(files):
                 if index % 128 == 0 and time.monotonic() >= deadline:
                     timed_out = True
                     break
-                if filename.casefold() in wanted:
-                    candidate = Path(directory, filename)
-                    if candidate.is_file() and not candidate.is_symlink():
-                        matches.append(candidate.resolve())
-                        if len(matches) >= params.max_results:
-                            break
-            if len(matches) >= params.max_results:
-                break
+                candidate = Path(directory, filename)
+                if not candidate.is_file() or candidate.is_symlink():
+                    continue
+                resolved: Path | None = None
+                for query in queries:
+                    if filename.casefold() == query.casefold():
+                        resolved = resolved or candidate.resolve()
+                        exact_matches[query].append(resolved)
+                        continue
+                    if params.match_mode == "exact":
+                        continue
+                    score = _filename_similarity(query, filename)
+                    if score >= params.similarity_threshold:
+                        resolved = resolved or candidate.resolve()
+                        fuzzy_matches[query].append((score, resolved))
             if timed_out or time.monotonic() >= deadline:
                 timed_out = True
                 break
 
-        matches.sort(key=lambda path: str(path).casefold())
+        ranked: dict[Path, tuple[float, str, str]] = {}
+        for query in queries:
+            exact = exact_matches[query]
+            candidates: list[tuple[float, Path, str]]
+            if params.match_mode == "exact" or (params.match_mode == "auto" and exact):
+                candidates = [(1.0, path, "exact") for path in exact]
+            else:
+                candidates = [(score, path, "fuzzy") for score, path in fuzzy_matches[query]]
+                if params.match_mode == "fuzzy":
+                    candidates.extend((1.0, path, "exact") for path in exact)
+            for score, path, method in candidates:
+                previous = ranked.get(path)
+                if previous is None or score > previous[0]:
+                    ranked[path] = (score, query, method)
+
+        ordered = sorted(ranked.items(), key=lambda item: (-item[1][0], str(item[0]).casefold()))
+        truncated = len(ordered) > params.max_results
+        ordered = ordered[: params.max_results]
+        matches = [path for path, _details in ordered]
+        expected_count = params.expected_count or len(queries)
+        selected_queries = {details[1] for _path, details in ordered}
+        unmatched_queries = [query for query in queries if query not in selected_queries]
+        partial = timed_out or truncated or denied > 0
+        needs_confirmation = len(matches) != expected_count or bool(unmatched_queries) or truncated
         content = "\n".join(str(path) for path in matches)
-        partial = timed_out or len(matches) >= params.max_results or denied > 0
         return ToolResult(
             ok=True,
             summary=(
@@ -126,13 +186,53 @@ class FileFindTool:
             sources=[Source(label=path.name, uri=str(path), kind="file") for path in matches],
             metadata={
                 "root": str(root),
-                "names": params.names,
+                "names": queries,
                 "count": len(matches),
+                "expected_count": expected_count,
+                "match_mode": params.match_mode,
+                "used_fuzzy": any(details[2] == "fuzzy" for _path, details in ordered),
+                "unmatched_names": unmatched_queries,
+                "needs_confirmation": needs_confirmation,
+                "candidates": [
+                    {
+                        "path": str(path),
+                        "query": details[1],
+                        "method": details[2],
+                        "score": round(details[0], 3),
+                    }
+                    for path, details in ordered
+                ],
                 "permission_denied": denied,
                 "timed_out": timed_out,
-                "truncated": len(matches) >= params.max_results,
+                "truncated": truncated,
             },
         )
+
+
+def _filename_similarity(query: str, filename: str) -> float:
+    """Compare both complete names and stems so extension typos remain recoverable."""
+    normalized_query = query.casefold()
+    normalized_filename = filename.casefold()
+    query_path = Path(normalized_query)
+    filename_path = Path(normalized_filename)
+    query_stem = query_path.stem
+    filename_stem = filename_path.stem
+    full_ratio = SequenceMatcher(None, normalized_query, normalized_filename).ratio()
+    stem_ratio = SequenceMatcher(None, query_stem, filename_stem).ratio()
+    containment = 0.0
+    if normalized_query in normalized_filename or normalized_filename in normalized_query:
+        containment = 0.9
+    elif (
+        min(len(query_stem), len(filename_stem)) >= 3
+        and min(len(query_stem), len(filename_stem)) / max(len(query_stem), len(filename_stem))
+        >= 0.5
+        and (query_stem in filename_stem or filename_stem in query_stem)
+    ):
+        containment = 0.86
+    score = max(full_ratio, stem_ratio * 0.97, containment)
+    if query_path.suffix and query_path.suffix != filename_path.suffix:
+        score = min(score, 0.55)
+    return score
 
 
 class ChannelFileSendParams(ToolParameters):
@@ -337,9 +437,16 @@ class FileMoveTool:
 
     def approval_metadata(self, params: ToolParameters, context: ToolContext) -> dict[str, object]:
         assert isinstance(params, FileMoveParams)
-        del context
         source = Path(params.source).expanduser().resolve()
         destination = Path(params.destination).expanduser().resolve()
+        if not source.is_file() or source.is_symlink():
+            raise ValueError(f"源文件不存在或不是普通文件：{source}")
+        if destination.is_dir():
+            destination = destination / _file_move_display_name(source, context)
+        if not destination.parent.is_dir():
+            raise ValueError(f"目标目录不存在：{destination.parent}")
+        if source == destination:
+            raise ValueError("源文件与目标文件相同")
         source_stat = params.approved_source_stat or _stat_fingerprint(source)
         destination_exists = (
             params.approved_destination_exists
@@ -394,6 +501,18 @@ class FileMoveTool:
             sources=[Source(label=destination.name, uri=str(destination), kind="file")],
             metadata={"source": str(source), "destination": str(destination)},
         )
+
+
+def _file_move_display_name(source: Path, context: ToolContext) -> str:
+    qq_files = (Path(context.data_dir).expanduser().resolve() / "qq_files").resolve()
+    name = source.name
+    if source.parent != qq_files or len(name) <= 37 or name[36] != "-":
+        return name
+    try:
+        UUID(name[:36])
+    except ValueError:
+        return name
+    return name[37:] or name
 
 
 class FileDeleteParams(ToolParameters):

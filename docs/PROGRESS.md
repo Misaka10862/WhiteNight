@@ -3,7 +3,43 @@
 > This file is updated with each build: recording completed, incomplete, issues and next steps.
 > Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
-Last update: 2026-08-22 (Enabled parallel tool calls and confirmation-free trusted QQ file delivery)
+Last update: 2026-08-26 (Native character, lorebook and prompt compiler)
+
+## 2026-08-26 personality and context compiler
+
+- Added native CCv2/V3 character cards, the single local-user Persona, live revisions, archival,
+  session-bound roles, selectable greetings, JSON/PNG round trips and deterministic QQ role
+  switching. Existing data migrates to the default Xiaobai character.
+- Added the pinned prompt compiler, safe macro allowlist, advanced custom blocks, prompt preview,
+  generation manifests, optional local tokenizer counting, and bounded high-compatibility lorebook
+  activation with reproducible probability and persistent timed effects.
+- Closed the deterministic memory integration gap: facts and episodes are character-scoped,
+  conflict/deleted values are excluded, summaries and retrieval are injected as sourced data, and
+  delayed extraction uses durable sequence checkpoints.
+- Added reversible migrations 0009/0010. A version-changing SQLite upgrade first creates and
+  integrity-checks a recoverable database copy; upgrade/downgrade tests preserve old messages and
+  memory bodies.
+- License conclusion: no SillyTavern AGPL source is copied or linked. Public card formats and
+  observable behavior are implemented independently; dependency review is recorded under
+  `docs/reports/personality-dependencies.md`.
+
+## 2026-08-24 maintenance
+
+- Fixed incoming QQ file downloads when NapCat reports only a display name plus `file_id`. The OneBot adapter now resolves trusted file metadata through `get_file`, then accepts only a regular local file, HTTP(S) URL, or validated base64 payload under the existing 16 MiB receive limit. This prevents the display name from being mistaken for a local path.
+- Preserved the latest verified QQ attachment path across follow-up file operations and Hermes/Codex delegation. Delegate tasks now receive an absolute working directory plus a server-generated attachment context, so phrases such as "the file I just sent" do not cause the target folder name to be searched as the source file.
+- Fixed managed Hermes 0.17 WebSocket authentication by sharing an in-memory process token between the child process and `/api/ws`. When no cloud credential exists, the managed Provider uses the installed local `qwen3-vl:8b` through Ollama's OpenAI-compatible endpoint; a real structured delegation returned `HERMES_OK`.
+- Fixed Codex MCP task calls incorrectly inheriting the 60-second startup timeout and added current structured-result parsing. MCP tool failures such as the observed Cloudflare 403 are now failures rather than successful task results. The MCP handshake and tool discovery pass; the configured user-level `AI-MEMBER` upstream remains externally blocked by Cloudflare and must be restored or replaced by its owner.
+- Added a mandatory pre-fix diagnosis rule to `AGENTS.md`: every bug must first be classified as a deterministic program defect, an 8B-model capability limit, or both, using logs/audits/tests/minimal reproduction before implementation changes.
+- File-move diagnosis: the program stored incoming QQ attachment paths as relative paths and allowed impossible destinations to reach approval; the 8B model then guessed the wrong absolute source, treated a directory as a complete destination, and retried after an approval reply omitted its one-time code. The adapter now stores absolute attachment paths, local and delegated models receive a server-verified source path, directory destinations preserve the original QQ filename, and nonexistent destination parents are rejected before approval. QQ approval replies without a code now receive deterministic guidance, and expired approvals are excluded from pending operations.
+
+## 2026-08-23 maintenance
+
+- Fixed the managed Hermes WebSocket adapter so gateway disconnects and protocol failures are normalized to `DelegateError` instead of escaping the delegate retry boundary. Managed startup no longer requires a DeepSeek key when Hermes uses its own logged-in provider credentials.
+- Added the Volcengine Doubao Search Global Provider behind the existing `SearchProvider` interface. The API key is stored in macOS Keychain account `volc_search_api_key`; requests use `https://open.feedcoopapi.com/search_api/global_search` and preserve source URLs/snippets as untrusted web results. Missing credentials fall back to DDG Lite/Bing.
+- Restored the missing per-user `com.whitenight.service` launchd installation after a QQ file request exposed that NapCat was online while the WhiteNight HTTP service was not running. The installed service uses the reviewed project template with `RunAtLoad` and `KeepAlive`; `scripts/check_service.sh` passed against the relaunched backend.
+- Upgraded `file.find` with explicit recursive search, exact-first fuzzy matching, ranked candidates, expected-count tracking and bounded result metadata. QQ file delivery now stops before upload when the candidate count is ambiguous, asks the user to choose by number/name/path, and recognizes the immediately following selection as a current delivery request.
+- Corrected location-aware file discovery after a real QQ request for the `Desktop/new_trial` folder was incorrectly rooted at the WhiteNight project directory. The service now resolves standard user-directory hints itself and overrides model-supplied `file.find.root`; fuzzy scoring rejects short-stem containment and wrong-extension false positives such as `d.py`/`methods.js` for a requested DOCX.
+- Verification: real Volcengine search returned one result; `./scripts/check.sh` passed with 169 passed / 4 skipped.
 
 ## Current stage
 

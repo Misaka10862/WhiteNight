@@ -30,6 +30,9 @@ _SAFETY_APPENDIX = """
 - 工具失败时如实说明工具返回的错误；可以修正参数后重试，但不得编造路径、结果或成功状态。
 """
 
+# Public name for the non-overridable compiler kernel. Kept separate from SOUL/personality.
+SAFETY_KERNEL = _SAFETY_APPENDIX
+
 
 def load_soul(soul_file: Path) -> str:
     """读取临时人格约束文件；缺失时返回最小身份描述而不是崩溃。"""

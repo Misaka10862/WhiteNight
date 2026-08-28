@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import parse_qs, unquote, urlparse
@@ -52,6 +53,72 @@ class SearchProvider(Protocol):
 
 class WebSearchError(RuntimeError):
     """搜索/页面提取失败。"""
+
+
+class VolcGlobalSearchProvider:
+    """火山引擎豆包搜索 Global API 适配器。"""
+
+    def __init__(
+        self,
+        key_provider: Callable[[], str | None],
+        endpoint: str = "https://open.feedcoopapi.com/search_api/global_search",
+        timeout_s: float = 20.0,
+    ) -> None:
+        self._key_provider = key_provider
+        self.endpoint = endpoint
+        self.timeout = httpx.Timeout(timeout_s, connect=10.0)
+
+    def search(self, query: str, limit: int = 8) -> list[SearchResult]:
+        key = self._key_provider()
+        if not key:
+            return DuckDuckGoSearchProvider(self.timeout.connect).search(query, limit)
+        payload = {
+            "Query": query,
+            "DocCount": limit,
+            "MaxSnippetLength": 500,
+            "MaxImageCountPerDoc": 0,
+        }
+        try:
+            with httpx.Client(
+                timeout=self.timeout,
+                headers={"Authorization": f"Bearer {key}"},
+                trust_env=False,
+            ) as client:
+                response = client.post(self.endpoint, json=payload)
+                response.raise_for_status()
+                body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise WebSearchError(f"火山搜索请求失败：{type(exc).__name__}") from exc
+        metadata = body.get("ResponseMetadata") or {}
+        error = metadata.get("Error") if isinstance(metadata, dict) else None
+        if error:
+            message = error.get("Message") if isinstance(error, dict) else str(error)
+            raise WebSearchError(f"火山搜索 API 返回错误：{message}")
+        result = body.get("Result") or {}
+        documents = result.get("Documents") or []
+        from datetime import UTC, datetime
+
+        retrieved_at = datetime.now(UTC).isoformat(timespec="seconds")
+        output: list[SearchResult] = []
+        for item in documents[:limit]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("Url") or "")
+            title = str(item.get("Title") or item.get("SiteName") or url)
+            if not url:
+                continue
+            output.append(
+                SearchResult(
+                    title=title,
+                    url=url,
+                    snippet=str(item.get("Snippet") or item.get("Content") or ""),
+                    retrieved_at=retrieved_at,
+                )
+            )
+        return output
+
+    def fetch(self, url: str, max_chars: int = 12_000) -> FetchedPage:
+        return DuckDuckGoSearchProvider(self.timeout.connect).fetch(url, max_chars)
 
 
 def is_private_or_loopback_url(url: str) -> bool:

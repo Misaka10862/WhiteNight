@@ -10,7 +10,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, or_, select
 from sqlalchemy.orm import Session as OrmSession
 
 from whitenight.storage.models import Approval, SessionGrant
@@ -205,10 +205,14 @@ class ApprovalService:
             return not (row.expires_at and row.expires_at < now)
 
     def list_pending(self, limit: int = 20) -> list[ApprovalRequest]:
+        now = _now()
         with self._orm() as orm:
             rows = orm.scalars(
                 select(Approval)
-                .where(Approval.status == "pending")
+                .where(
+                    Approval.status == "pending",
+                    or_(Approval.expires_at.is_(None), Approval.expires_at >= now),
+                )
                 .order_by(Approval.created_at.desc())
                 .limit(limit)
             ).all()

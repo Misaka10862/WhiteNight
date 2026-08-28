@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchModelConfig, fetchSystemHealth, updateModelKeepAlive } from '../api'
+import { fetchModelConfig, fetchSystemHealth, updateModelKeepAlive, updateTokenizerPath } from '../api'
 
 const KEEP_ALIVE_LABELS: Record<string, string> = {
   '-1': '常驻（最快，约 5.6GB 内存）',
@@ -17,10 +17,12 @@ export default function ModelsPage() {
   const modelConfig = useQuery({ queryKey: ['model-config'], queryFn: fetchModelConfig })
   const [keepAlive, setKeepAlive] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [tokenizerPath, setTokenizerPath] = useState('')
 
   useEffect(() => {
     if (modelConfig.data && !loaded) {
       setKeepAlive(modelConfig.data.ollama_keep_alive)
+      setTokenizerPath(modelConfig.data.tokenizer_path ?? '')
       setLoaded(true)
     }
   }, [modelConfig.data, loaded])
@@ -31,6 +33,10 @@ export default function ModelsPage() {
       queryClient.invalidateQueries({ queryKey: ['model-config'] })
       queryClient.invalidateQueries({ queryKey: ['system-health'] })
     },
+  })
+  const saveTokenizer = useMutation({
+    mutationFn: updateTokenizerPath,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['model-config'] }),
   })
 
   const options = modelConfig.data?.options ?? ['-1', '5m', '30m', '1h', '6h', '12h']
@@ -79,6 +85,15 @@ export default function ModelsPage() {
         </p>
         {saveKeepAlive.isError && <div className="chat-error">保存失败：{String(saveKeepAlive.error)}</div>}
         {saveKeepAlive.isSuccess && <div className="chat-ok">已保存并立即生效。</div>}
+      </div>
+      <div className="panel">
+        <h3>上下文计数</h3>
+        <div className="inline-form">
+          <label>本地 tokenizer.json 路径<input value={tokenizerPath} onChange={(event) => setTokenizerPath(event.target.value)} placeholder="/absolute/path/tokenizer.json" /></label>
+        </div>
+        <div className="actions"><button disabled={!tokenizerPath || saveTokenizer.isPending} onClick={() => saveTokenizer.mutate(tokenizerPath)}>注册 tokenizer</button></div>
+        <p className="muted">状态：{modelConfig.data?.tokenizer_available ? '精确计数可用' : '未配置，由模型处理上下文上限'} · 上限 {modelConfig.data?.context_tokens ?? '?'} tokens</p>
+        {saveTokenizer.isError && <div className="chat-error">注册失败：{String(saveTokenizer.error)}</div>}
       </div>
       <div className="panel">
         <h3>QQ / OneBot</h3>

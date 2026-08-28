@@ -17,6 +17,151 @@ export interface SessionSummary {
   created_at: string
   updated_at: string
   message_count: number
+  character_id: string | null
+  persona_id: string | null
+  character_name: string | null
+  character_avatar_path: string | null
+}
+
+export interface CharacterCardData {
+  name: string
+  description: string
+  personality: string
+  scenario: string
+  first_mes: string
+  mes_example: string
+  creator_notes: string
+  system_prompt: string
+  post_history_instructions: string
+  alternate_greetings: string[]
+  tags: string[]
+  creator: string
+  character_version: string
+  extensions: Record<string, unknown>
+  character_book?: Record<string, unknown> | null
+  [key: string]: unknown
+}
+
+export interface CharacterCard {
+  spec: 'chara_card_v2' | 'chara_card_v3'
+  spec_version: string
+  data: CharacterCardData
+  [key: string]: unknown
+}
+
+export interface CharacterRecord {
+  id: string
+  name: string
+  revision_id: string
+  revision: number
+  card: CharacterCard
+  content_hash: string
+  avatar_path: string | null
+  is_default: boolean
+  archived_at: string | null
+}
+
+export interface PersonaRecord {
+  id: string
+  name: string
+  description: string
+  content_hash: string
+}
+
+export interface PromptBlock {
+  id: string
+  name: string
+  role: 'system' | 'user' | 'assistant'
+  content: string
+  enabled: boolean
+  position: 'relative' | 'in_chat'
+  depth: number
+  order: number
+  triggers: string[]
+  outlet: string | null
+}
+
+export interface PromptProfile {
+  id: string
+  character_id: string
+  revision: number
+  blocks: PromptBlock[]
+  content_hash: string
+}
+
+export interface LorebookEntry {
+  id: string
+  comment: string
+  content: string
+  keys: string[]
+  secondary_keys: string[]
+  secondary_logic: 'and_any' | 'and_all' | 'not_any' | 'not_all'
+  enabled: boolean
+  constant: boolean
+  position: string
+  depth: number
+  role: 'system' | 'user' | 'assistant'
+  order: number
+  probability: number
+  group: string
+  group_override: boolean
+  group_weight: number
+  sticky: number
+  cooldown: number
+  delay: number
+  scan_depth: number | null
+  case_sensitive: boolean
+  match_whole_words: boolean
+  prevent_recursion: boolean
+  exclude_recursion: boolean
+  delay_until_recursion: number
+  triggers: string[]
+  ignore_budget: boolean
+  outlet: string
+  match_persona: boolean
+  match_character: boolean
+  match_scenario: boolean
+  extensions: Record<string, unknown>
+}
+
+export interface LorebookData {
+  name: string
+  entries: LorebookEntry[]
+  scan_depth: number
+  token_budget: number
+  recursive: boolean
+  max_recursion_steps: number
+  min_activations: number
+  extensions: Record<string, unknown>
+}
+
+export interface LorebookRecord {
+  id: string
+  revision: number
+  data: LorebookData
+  content_hash: string
+  globally_enabled: boolean
+  archived_at: string | null
+}
+
+export interface PromptPreview {
+  messages: Array<Record<string, unknown>>
+  manifest: Array<{
+    id: string
+    name: string
+    role: string
+    source: string
+    enabled: boolean
+    depth: number
+    token_count: number | null
+    content_hash: string
+  }>
+  activated_lore: Array<Record<string, unknown>>
+  seed: string
+  tokenizer: 'exact' | 'unavailable'
+  total_tokens: number | null
+  character_revision_id: string
+  prompt_profile_revision: number
 }
 
 export interface MessageRecord {
@@ -74,6 +219,7 @@ export interface FactRecord {
   conflict_state: 'none' | 'conflicted' | 'resolved'
   created_at: string
   updated_at: string
+  character_id: string | null
 }
 
 export interface EpisodeRecord {
@@ -85,6 +231,7 @@ export interface EpisodeRecord {
   access_count: number
   created_at: string
   updated_at: string
+  character_id: string | null
 }
 
 export interface MemoryHit {
@@ -144,6 +291,9 @@ export interface SystemHealth {
 export interface ModelConfig {
   ollama_keep_alive: string
   options: string[]
+  tokenizer_path: string
+  tokenizer_available: boolean
+  context_tokens: number
 }
 
 export interface ProactiveConfig {
@@ -177,11 +327,11 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 // --- sessions / chat ---
 export const fetchStatus = () => jsonFetch<StatusResponse>('/api/v1/status')
 export const fetchSessions = () => jsonFetch<SessionSummary[]>('/api/v1/sessions')
-export const createSession = (title?: string) =>
+export const createSession = (payload?: { title?: string; character_id?: string; persona_id?: string; greeting_index?: number }) =>
   jsonFetch<SessionSummary>('/api/v1/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(payload ?? {}),
   })
 export const renameSession = (id: string, title: string) =>
   jsonFetch<SessionSummary>(`/api/v1/sessions/${id}`, {
@@ -206,8 +356,9 @@ export async function exportSession(id: string, format: 'markdown' | 'jsonl'): P
 }
 
 // --- memory ---
-export const fetchFacts = () => jsonFetch<FactRecord[]>('/api/v1/memory/facts')
-export const createFact = (payload: { key: string; value: string; confidence?: number }) =>
+export const fetchFacts = (characterId?: string | null) =>
+  jsonFetch<FactRecord[]>(characterId ? `/api/v1/memory/facts?character_id=${encodeURIComponent(characterId)}` : '/api/v1/memory/facts')
+export const createFact = (payload: { key: string; value: string; confidence?: number; character_id?: string | null }) =>
   jsonFetch<FactRecord>('/api/v1/memory/facts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -227,8 +378,9 @@ export const resolveFact = (id: string, keep: boolean) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keep }),
   })
-export const fetchEpisodes = () => jsonFetch<EpisodeRecord[]>('/api/v1/memory/episodes')
-export const createEpisode = (payload: { content: string; importance?: number; confidence?: number }) =>
+export const fetchEpisodes = (characterId?: string | null) =>
+  jsonFetch<EpisodeRecord[]>(characterId ? `/api/v1/memory/episodes?character_id=${encodeURIComponent(characterId)}` : '/api/v1/memory/episodes')
+export const createEpisode = (payload: { content: string; importance?: number; confidence?: number; character_id?: string | null }) =>
   jsonFetch<EpisodeRecord>('/api/v1/memory/episodes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -236,8 +388,8 @@ export const createEpisode = (payload: { content: string; importance?: number; c
   })
 export const deleteEpisode = (id: string) =>
   jsonFetch<void>(`/api/v1/memory/episodes/${id}`, { method: 'DELETE' })
-export const retrieveMemory = (query: string) =>
-  jsonFetch<MemoryHit[]>(`/api/v1/memory/retrieve?query=${encodeURIComponent(query)}&limit=10`)
+export const retrieveMemory = (query: string, characterId?: string | null) =>
+  jsonFetch<MemoryHit[]>(`/api/v1/memory/retrieve?query=${encodeURIComponent(query)}&limit=10${characterId ? `&character_id=${encodeURIComponent(characterId)}` : ''}`)
 export async function exportMemory(format: 'markdown' | 'jsonl'): Promise<void> {
   const response = await fetch(`/api/v1/memory/export?fmt=${format}`)
   if (!response.ok) throw new Error(`memory export failed: ${response.status}`)
@@ -284,6 +436,59 @@ export const updateModelKeepAlive = (ollama_keep_alive: string) =>
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keep_alive: ollama_keep_alive }),
+  })
+export const updateTokenizerPath = (path: string) =>
+  jsonFetch<{ path: string; available: boolean }>('/api/v1/model/tokenizer', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+
+// --- characters / persona / lorebooks / prompt compiler ---
+export const fetchCharacters = () => jsonFetch<CharacterRecord[]>('/api/v1/characters')
+export const importCharacter = (card: CharacterCard, avatarDataUrl?: string | null) =>
+  jsonFetch<CharacterRecord>('/api/v1/characters/import', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ card, avatar_data_url: avatarDataUrl ?? null }),
+  })
+export const updateCharacter = (id: string, card: CharacterCard) =>
+  jsonFetch<CharacterRecord>(`/api/v1/characters/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(card),
+  })
+export const archiveCharacter = (id: string) =>
+  jsonFetch<void>(`/api/v1/characters/${id}/archive`, { method: 'POST' })
+export const fetchCharacterRevisions = (id: string) =>
+  jsonFetch<Array<{ id: string; revision: number; content_hash: string; created_at: string }>>(`/api/v1/characters/${id}/revisions`)
+export const restoreCharacterRevision = (id: string, revisionId: string) =>
+  jsonFetch<CharacterRecord>(`/api/v1/characters/${id}/revisions/${revisionId}/restore`, { method: 'POST' })
+export const exportCharacter = (id: string) =>
+  jsonFetch<{ card: CharacterCard; avatar_data_url: string | null }>(`/api/v1/characters/${id}/export`)
+export const fetchPersona = () => jsonFetch<PersonaRecord>('/api/v1/persona')
+export const updatePersona = (name: string, description: string) =>
+  jsonFetch<PersonaRecord>('/api/v1/persona', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description }),
+  })
+export const fetchPromptProfile = (characterId: string) =>
+  jsonFetch<PromptProfile>(`/api/v1/prompt-profiles/${characterId}`)
+export const updatePromptProfile = (characterId: string, blocks: PromptBlock[]) =>
+  jsonFetch<PromptProfile>(`/api/v1/prompt-profiles/${characterId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }),
+  })
+export const fetchLorebooks = () => jsonFetch<LorebookRecord[]>('/api/v1/lorebooks')
+export const createLorebook = (data: LorebookData, characterId?: string) =>
+  jsonFetch<LorebookRecord>('/api/v1/lorebooks', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data, globally_enabled: false, character_id: characterId ?? null }),
+  })
+export const updateLorebook = (id: string, data: LorebookData) =>
+  jsonFetch<LorebookRecord>(`/api/v1/lorebooks/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+  })
+export const archiveLorebook = (id: string) =>
+  jsonFetch<void>(`/api/v1/lorebooks/${id}/archive`, { method: 'POST' })
+export const fetchPromptPreview = (sessionId: string, text = '') =>
+  jsonFetch<PromptPreview>(`/api/v1/sessions/${sessionId}/prompt-preview`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
   })
 export const fetchProactiveStatus = () => jsonFetch<ProactiveStatus>('/api/v1/proactive/status')
 export const updateProactiveConfig = (config: ProactiveConfig) =>

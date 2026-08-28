@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     openai_timeout_s: float = 120.0
     model_supports_vision: bool = False  # qwen3:8b 无视觉；LoRA 后切回 qwen3-vl 并置 true
     model_max_output_tokens: int = 2048  # Ollama num_predict 上限，防止退化成无限生成
+    model_context_tokens: int = 32768
+    model_tokenizer_path: Path | None = None
     ollama_keep_alive: str = "-1"  # -1 常驻内存；默认 5m 会在闲置后卸载导致下次回复延迟
     ollama_base_url: str = "http://127.0.0.1:11434"
     context_budget_chars: int = 12_000
@@ -63,10 +65,14 @@ class Settings(BaseSettings):
     hermes_gateway_url: str = "http://127.0.0.1:9119"
     hermes_managed: bool = True
     hermes_command: str = "hermes"
-    hermes_provider: str = "deepseek"
-    hermes_model: str = "deepseek-v4-flash-vision-exp"
+    hermes_provider: str = "custom"
+    hermes_model: str = "qwen3-vl:8b"
+    hermes_inference_base_url: str = "http://127.0.0.1:11434/v1"
     hermes_startup_timeout_s: float = 45.0
     deepseek_api_key_account: str = "deepseek_api_key"
+    volc_search_api_key_account: str = "volc_search_api_key"
+    volc_search_endpoint: str = "https://open.feedcoopapi.com/search_api/global_search"
+    volc_search_timeout_s: float = 20.0
     codex_command: str = "codex"
     codex_timeout_s: float = 1800.0
 

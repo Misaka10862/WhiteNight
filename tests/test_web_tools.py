@@ -6,10 +6,55 @@ from whitenight.tools.base import ToolContext
 from whitenight.tools.web import (
     FetchedPage,
     SearchResult,
+    VolcGlobalSearchProvider,
     WebFetchTool,
     WebSearchTool,
     _extract_ddg_url,
 )
+
+
+def test_volc_global_search_maps_documents(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, object]:
+            return {
+                "Result": {
+                    "Documents": [
+                        {"Title": "火山", "Url": "https://example.com", "Snippet": "摘要"}
+                    ]
+                }
+            }
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def post(self, url, json):
+            captured["url"] = url
+            captured["json"] = json
+            return Response()
+
+    monkeypatch.setattr("whitenight.tools.web.httpx.Client", Client)
+    results = VolcGlobalSearchProvider(lambda: "secret").search("测试", 3)
+    assert results[0].url == "https://example.com"
+    assert captured["headers"] == {"Authorization": "Bearer secret"}
+    assert captured["trust_env"] is False
+    assert captured["json"] == {
+        "Query": "测试",
+        "DocCount": 3,
+        "MaxSnippetLength": 500,
+        "MaxImageCountPerDoc": 0,
+    }
 
 
 class FakeSearchProvider:

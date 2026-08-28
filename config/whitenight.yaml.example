@@ -32,6 +32,9 @@ openai_api_key_account: openai_api_key
 openai_timeout_s: 120.0
 model_supports_vision: false   # Set true when returning to qwen3-vl:8b.
 model_max_output_tokens: 2048  # Ollama num_predict cap prevents runaway generation.
+model_context_tokens: 32768
+# Optional local HuggingFace tokenizer.json. Empty means Provider-enforced context only.
+model_tokenizer_path:
 ollama_keep_alive: "-1"        # -1 keeps the model loaded; durations such as 5m/1h also work.
 ollama_base_url: http://127.0.0.1:11434
 context_budget_chars: 12000
@@ -48,10 +51,14 @@ embedding_model: ""
 hermes_gateway_url: http://127.0.0.1:9119
 hermes_managed: true
 hermes_command: hermes
-hermes_provider: deepseek
-hermes_model: deepseek-v4-flash-vision-exp
+hermes_provider: custom
+hermes_model: qwen3-vl:8b
+hermes_inference_base_url: http://127.0.0.1:11434/v1
 hermes_startup_timeout_s: 45.0
 deepseek_api_key_account: deepseek_api_key
+volc_search_api_key_account: volc_search_api_key
+volc_search_endpoint: https://open.feedcoopapi.com/search_api/global_search
+volc_search_timeout_s: 20.0
 codex_command: codex
 codex_timeout_s: 1800
 

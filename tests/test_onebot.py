@@ -20,6 +20,8 @@ from whitenight.channels.onebot import (
     split_text,
 )
 from whitenight.config import Settings
+from whitenight.personality.store import PersonalityStore
+from whitenight.personality.types import CharacterCard
 from whitenight.policy.approvals import ApprovalService
 from whitenight.storage.sessions import SessionStore
 
@@ -31,6 +33,9 @@ class FakeQQ:
     def send_private_message(self, user_id: int, text: str) -> int:
         self.messages.append((user_id, text))
         return 1
+
+    def get_file(self, file_id: str) -> dict[str, object]:
+        raise AssertionError(f"unexpected get_file call: {file_id}")
 
 
 def _adapter(engine: Engine, settings: Settings, sender: FakeQQ):
@@ -105,6 +110,42 @@ def test_clear_rotates_context_without_deleting_history(engine: Engine, settings
     assert all(message.content != "/clear" for message in new_messages)
 
 
+def test_character_command_is_deterministic_and_rotates_session(
+    engine: Engine, settings: Settings
+) -> None:
+    sender = FakeQQ()
+    qq_settings = settings.model_copy(
+        update={"qq_enabled": True, "qq_owner_ids": [10001], "qq_rate_limit_seconds": 0.0}
+    )
+    sessions = SessionStore(engine, attachments_dir=qq_settings.data_dir / "attachments")
+    mappings = ChannelSessionStore(engine, sessions)
+    personalities = PersonalityStore(engine)
+    character = personalities.create_character(
+        CharacterCard.model_validate(
+            {
+                "spec": "chara_card_v3",
+                "spec_version": "3.0",
+                "data": {"name": "档案员", "first_mes": "请出示档案编号。"},
+            }
+        )
+    )
+    adapter = OneBotAdapter(
+        qq_settings,
+        sessions,
+        mappings,
+        ChatService(sessions, DummyProvider(), qq_settings),
+        ApprovalService(engine),
+        sender=sender,  # type: ignore[arg-type]
+        personalities=personalities,
+    )
+    listed = asyncio_run(adapter.handle_event(_private(110, "/角色")))
+    assert listed["status"] == "character_list"
+    switched = asyncio_run(adapter.handle_event(_private(111, "/角色 档案员")))
+    assert switched["status"] == "character_switched"
+    assert sessions.get_session(str(switched["session_id"])).character_id == character.id
+    assert sessions.list_messages(str(switched["session_id"]))[0].content == "请出示档案编号。"
+
+
 def test_non_owner_and_group_ignored(engine: Engine, settings: Settings) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)
@@ -176,6 +217,77 @@ def test_file_segment_saves_local_copy(engine: Engine, settings: Settings, tmp_p
     qq_files = list((settings.data_dir / "qq_files").glob("*.bin"))
     assert len(qq_files) == 1
     assert qq_files[0].read_bytes() == b"hello qq"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert str(qq_files[0].resolve()) in message.content
+
+
+def test_file_segment_resolves_file_id_through_onebot(engine: Engine, settings: Settings) -> None:
+    class FileQQ(FakeQQ):
+        def get_file(self, file_id: str) -> dict[str, object]:
+            assert file_id == "qq-file-1"
+            return {
+                "file_name": "report.txt",
+                "base64": base64.b64encode(b"resolved by onebot").decode("ascii"),
+            }
+
+    sender = FileQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = {
+        "post_type": "message",
+        "message_type": "private",
+        "message_id": 7,
+        "user_id": 10001,
+        "raw_message": "[CQ:file,file=report.txt,file_id=qq-file-1]",
+        "message": [
+            {
+                "type": "file",
+                "data": {"file": "report.txt", "file_id": "qq-file-1"},
+            }
+        ],
+    }
+
+    status = asyncio_run(adapter.handle_event(event))
+
+    assert status["status"] == "file_received"
+    assert "收到文件：report.txt" in sender.messages[-1][1]
+    saved = list((settings.data_dir / "qq_files").glob("*-report.txt"))
+    assert len(saved) == 1
+    assert saved[0].read_bytes() == b"resolved by onebot"
+
+
+def test_approval_without_code_returns_exact_qq_command(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    first = asyncio_run(adapter.handle_event(_private(801, "你好")))
+    session_id = str(first["session_id"])
+    approval = adapter._approvals.request(
+        "file.move",
+        "medium",
+        "once",
+        '{"source":"/tmp/a","destination":"/tmp/b"}',
+        session_id=session_id,
+        channel="onebot",
+    )
+
+    status = asyncio_run(adapter.handle_event(_private(802, "允许操作")))
+
+    assert status["status"] == "approval_code_required"
+    assert sender.messages[-1][1] == (
+        f"审批必须带一次性编号。请回复：同意 {approval.code}，或：拒绝 {approval.code}。"
+    )
+
+
+def test_approval_without_code_reports_when_nothing_is_pending(
+    engine: Engine, settings: Settings
+) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+
+    status = asyncio_run(adapter.handle_event(_private(803, "允许操作")))
+
+    assert status["status"] == "approval_invalid"
+    assert sender.messages[-1][1] == "当前没有有效的待审批操作，请重新发起文件操作。"
 
 
 def test_poke_segment_is_recognized_and_visible(engine: Engine, settings: Settings) -> None:
@@ -268,6 +380,28 @@ def test_upload_private_file_uses_base64_json(tmp_path) -> None:
     encoded = str(captured["file"])
     assert encoded.startswith("base64://")
     assert base64.b64decode(encoded.removeprefix("base64://")) == b"hello qq file"
+
+
+def test_get_file_uses_onebot_file_id() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "retcode": 0,
+                "data": {"file_name": "data.bin", "url": "http://local/data.bin"},
+            },
+        )
+
+    sender = OneBotSender("http://onebot", transport=httpx.MockTransport(handler))
+
+    metadata = sender.get_file("file-123")
+
+    assert captured == {"file_id": "file-123"}
+    assert metadata["url"] == "http://local/data.bin"
 
 
 def test_onebot_sender_does_not_retry_client_error() -> None:

@@ -53,9 +53,11 @@ class HybridMemoryRetriever:
         self._lexical_weight = lexical_weight
         self._semantic_weight = semantic_weight
 
-    def retrieve(self, query: str, limit: int = 8) -> list[MemoryHit]:
-        facts = self._store.search_facts(query, limit=limit)
-        episodes = self._store.search_episodes(query, limit=limit)
+    def retrieve(
+        self, query: str, limit: int = 8, character_id: str | None = None
+    ) -> list[MemoryHit]:
+        facts = self._store.search_facts(query, limit=limit, character_id=character_id)
+        episodes = self._store.search_episodes(query, limit=limit, character_id=character_id)
 
         documents: list[tuple[str, str, str]] = [
             (fact.id, "fact", f"{fact.key}：{fact.value}") for fact in facts

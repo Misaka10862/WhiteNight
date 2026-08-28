@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import logging
 import re
 import time
@@ -23,6 +24,7 @@ from whitenight.channels.onebot.session_map import ChannelSessionStore
 from whitenight.channels.onebot.types import OneBotPrivateMessageEvent, parse_segments
 from whitenight.channels.types import ChannelContext, ChatRequest
 from whitenight.config import Settings
+from whitenight.personality.store import PersonalityStore
 from whitenight.policy.approvals import ApprovalService
 from whitenight.storage.sessions import SessionStore
 
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 _APPROVE_RE = re.compile(r"^(?:同意|批准|允许)\s+([A-Za-z0-9_-]{6,16})$")
 _REJECT_RE = re.compile(r"^(?:拒绝|不同意)\s+([A-Za-z0-9_-]{6,16})$")
+_APPROVAL_WITHOUT_CODE_RE = re.compile(r"^(?:同意|批准|允许|允许操作)[！!。.]?$")
+_CHARACTER_RE = re.compile(r"^/角色(?:\s+(.+))?$")
 
 
 class EventDeduplicator:
@@ -78,6 +82,7 @@ class OneBotAdapter:
         chat_service: ChatService,
         approvals: ApprovalService,
         sender: OneBotSender | None = None,
+        personalities: PersonalityStore | None = None,
     ) -> None:
         self._settings = settings
         self._sessions = sessions
@@ -87,6 +92,7 @@ class OneBotAdapter:
         self._sender = sender or OneBotSender(
             settings.qq_onebot_api_url, settings.qq_reply_max_chars
         )
+        self._personalities = personalities
         self._dedupe = EventDeduplicator()
         self._rate = RateLimiter(settings.qq_rate_limit_seconds)
         self._locks: dict[int, asyncio.Lock] = {}
@@ -144,6 +150,36 @@ class OneBotAdapter:
 
         session_id = self._channel_sessions.get_or_create("onebot", str(event.user_id))
 
+        character_command = _CHARACTER_RE.fullmatch(parsed.text.strip())
+        if character_command and self._personalities is not None:
+            requested = (character_command.group(1) or "").strip()
+            if not requested:
+                current_id, _persona_id = self._personalities.session_identity(session_id)
+                current = self._personalities.get_character(current_id)
+                names = "、".join(item.name for item in self._personalities.list_characters())
+                await self._send(event.user_id, f"当前角色：{current.name}\n可用角色：{names}")
+                return {"status": "character_list", "session_id": session_id}
+            character = self._personalities.find_character(requested)
+            if character is None:
+                await self._send(event.user_id, f"没有找到角色：{requested}")
+                return {"status": "character_not_found", "session_id": session_id}
+            previous_id, new_session_id = self._channel_sessions.reset(
+                "onebot",
+                str(event.user_id),
+                character_id=character.id,
+                persona_id=self._personalities.default_persona_id(),
+                greeting=character.card.data.first_mes or None,
+            )
+            await self._send(event.user_id, f"已切换到角色：{character.name}")
+            if character.card.data.first_mes:
+                await self._send(event.user_id, character.card.data.first_mes)
+            return {
+                "status": "character_switched",
+                "previous_session_id": previous_id,
+                "session_id": new_session_id,
+                "character_id": character.id,
+            }
+
         approval = await self._handle_approval_command(event, parsed.text, session_id)
         if approval is not None:
             return approval
@@ -163,8 +199,13 @@ class OneBotAdapter:
                 "session_id": new_session_id,
             }
 
-        if parsed.file_path and not parsed.image_data_url:
-            saved = await self._save_qq_file(event.user_id, parsed.file_path, parsed.file_name)
+        if (parsed.file_path or parsed.file_id) and not parsed.image_data_url:
+            saved = await self._save_qq_file(
+                event.user_id,
+                parsed.file_path or "",
+                parsed.file_name,
+                parsed.file_id,
+            )
             if saved:
                 self._sessions.add_message(
                     session_id,
@@ -227,6 +268,28 @@ class OneBotAdapter:
         approve_match = _APPROVE_RE.match(text.strip())
         reject_match = _REJECT_RE.match(text.strip())
         if not approve_match and not reject_match:
+            if _APPROVAL_WITHOUT_CODE_RE.fullmatch(text.strip()):
+                pending = [
+                    item
+                    for item in self._approvals.list_pending()
+                    if item.session_id == session_id and item.channel == "onebot"
+                ]
+                if len(pending) == 1:
+                    code = pending[0].code
+                    await self._send(
+                        event.user_id,
+                        f"审批必须带一次性编号。请回复：同意 {code}，或：拒绝 {code}。",
+                    )
+                    return {"status": "approval_code_required"}
+                if len(pending) > 1:
+                    choices = "；".join(f"{item.tool_name}：{item.code}" for item in pending)
+                    await self._send(
+                        event.user_id,
+                        f"有多个待审批操作，请带编号回复“同意 <编号>”或“拒绝 <编号>”：{choices}",
+                    )
+                    return {"status": "approval_code_required"}
+                await self._send(event.user_id, "当前没有有效的待审批操作，请重新发起文件操作。")
+                return {"status": "approval_invalid"}
             return None
         match = approve_match if approve_match else reject_match
         assert match is not None
@@ -305,24 +368,72 @@ class OneBotAdapter:
             logger.exception("QQ 回复发送失败 user=%s", user_id)
 
     async def _save_qq_file(
-        self, user_id: int, source: str, name: str | None
+        self,
+        user_id: int,
+        source: str,
+        name: str | None,
+        file_id: str | None = None,
     ) -> dict[str, str] | None:
-        target_dir = self._settings.data_dir / "qq_files"
+        target_dir = (self._settings.data_dir / "qq_files").resolve()
         target_dir.mkdir(parents=True, exist_ok=True)
         safe_name = Path(name or "file").name or f"file-{uuid4()}"
         target = target_dir / f"{uuid4()}-{safe_name}"
-        if source.startswith("http://") or source.startswith("https://"):
+        resolved_source = source
+        if not self._is_usable_file_source(resolved_source) and file_id:
             try:
-                content = await self._download(source)
+                metadata = self._sender.get_file(file_id)
+                resolved_source = self._file_source_from_metadata(metadata) or ""
+                resolved_name = metadata.get("file_name") or metadata.get("name")
+                if isinstance(resolved_name, str) and resolved_name:
+                    safe_name = Path(resolved_name).name or safe_name
+                    target = target_dir / f"{uuid4()}-{safe_name}"
+            except Exception:
+                logger.exception("QQ 文件元数据获取失败 file_id=%s", file_id)
+                return None
+        if resolved_source.startswith("http://") or resolved_source.startswith("https://"):
+            try:
+                content = await self._download(resolved_source)
                 target.write_bytes(content)
             except Exception:
-                logger.exception("QQ 文件下载失败 url=%s", source)
+                logger.exception("QQ 文件下载失败 url=%s", resolved_source)
                 return None
-        elif Path(source).exists():
-            target.write_bytes(Path(source).read_bytes())
+        elif resolved_source.startswith("base64://"):
+            try:
+                content = base64.b64decode(resolved_source.removeprefix("base64://"), validate=True)
+            except (ValueError, binascii.Error):
+                logger.warning("QQ 文件 base64 内容无效 file_id=%s", file_id)
+                return None
+            if len(content) > 16 * 1024 * 1024:
+                logger.warning("QQ 文件超过接收大小限制 file_id=%s", file_id)
+                return None
+            target.write_bytes(content)
+        elif Path(resolved_source).is_file() and not Path(resolved_source).is_symlink():
+            source_path = Path(resolved_source)
+            if source_path.stat().st_size > 16 * 1024 * 1024:
+                logger.warning("QQ 文件超过接收大小限制 path=%s", source_path)
+                return None
+            target.write_bytes(source_path.read_bytes())
         else:
             return None
         return {"name": safe_name, "path": str(target)}
+
+    @staticmethod
+    def _is_usable_file_source(source: str) -> bool:
+        return bool(
+            source.startswith(("http://", "https://", "base64://"))
+            or (Path(source).is_file() and not Path(source).is_symlink())
+        )
+
+    @staticmethod
+    def _file_source_from_metadata(metadata: dict[str, object]) -> str | None:
+        for key in ("url", "file", "path"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                return value
+        encoded = metadata.get("base64")
+        if isinstance(encoded, str) and encoded:
+            return encoded if encoded.startswith("base64://") else f"base64://{encoded}"
+        return None
 
     async def _download(self, url: str, max_bytes: int = 16 * 1024 * 1024) -> bytes:
         content, _ = await self._download_content(url, max_bytes=max_bytes)

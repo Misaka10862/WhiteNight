@@ -50,6 +50,28 @@ class FindProvider:
         return {"ok": True}
 
 
+class AttachmentContextProvider:
+    def __init__(self, attachment: Path) -> None:
+        self.attachment = attachment
+
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        del tools
+        context = next(
+            message.content
+            for message in messages
+            if message.role == "system"
+            and "服务器已验证当前会话最近收到的 QQ 附件" in message.content
+        )
+        assert f"绝对路径：{self.attachment.resolve()}" in context
+        yield ModelChunk(delta="已识别附件。")
+        yield ModelChunk(done=True)
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
+
+
 class WriteProvider:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -172,6 +194,65 @@ class UnauthorizedSendProvider:
                     id="unauthorized-send",
                     name="channel.file.send",
                     arguments={"path": "/tmp/not-authorized.txt"},
+                )
+            ],
+        )
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
+
+
+class AmbiguousFileDeliveryProvider:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        del messages
+        assert tools and any(tool.name == "channel.file.send" for tool in tools)
+        yield ModelChunk(
+            done=True,
+            tool_calls=[
+                ToolCall(
+                    id="ambiguous-find",
+                    name="file.find",
+                    arguments={
+                        "names": ["report.txt"],
+                        "root": str(self.root),
+                        "match_mode": "fuzzy",
+                        "expected_count": 1,
+                        "similarity_threshold": 0.6,
+                    },
+                )
+            ],
+        )
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
+
+
+class WrongRootFileDeliveryProvider:
+    def __init__(self, wrong_root: Path) -> None:
+        self.wrong_root = wrong_root
+
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        assert tools and any(tool.name == "channel.file.send" for tool in tools)
+        if any(message.role == "tool" for message in messages):
+            yield ModelChunk(done=True)
+            return
+        yield ModelChunk(
+            done=True,
+            tool_calls=[
+                ToolCall(
+                    id="wrong-root-find",
+                    name="file.find",
+                    arguments={
+                        "names": ["Methods_4改.docx"],
+                        "root": str(self.wrong_root),
+                    },
                 )
             ],
         )
@@ -369,3 +450,145 @@ def test_send_tool_cannot_run_without_current_delivery_intent(engine, settings):
     assert delivery.sent == []
     assert events[-1].type == "error"
     assert events[-1].message and "未开放的工具" in events[-1].message
+
+
+def test_ambiguous_file_delivery_asks_before_sending(engine, settings, tmp_path):
+    (tmp_path / "report-final.txt").write_text("one", encoding="utf-8")
+    (tmp_path / "report-draft.txt").write_text("two", encoding="utf-8")
+    delivery = FakeDelivery()
+    service, store, _ = _service(
+        engine,
+        settings,
+        AmbiguousFileDeliveryProvider(tmp_path),
+        [FileFindTool(), ChannelFileSendTool()],
+        delivery,
+    )
+    session = store.create_session()
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="找到 report.txt 文件发给我"),
+                ChannelContext(channel="onebot", target="10001"),
+            )
+        ]
+
+    events = asyncio.run(run())
+
+    assert delivery.sent == []
+    assert events[-1].type == "done"
+    assert events[-1].text and events[-1].text.startswith("找到的文件候选需要你确认")
+    assert "1." in events[-1].text and "2." in events[-1].text
+    assert store.list_messages(session.id)[-1].content == events[-1].text
+
+
+def test_candidate_selection_followup_restores_current_delivery_intent(engine, settings):
+    service, store, _ = _service(engine, settings, FindProvider(), [FileFindTool()])
+    session = store.create_session()
+    store.add_message(session.id, "user", "找到 report.txt 文件发给我")
+    store.add_message(
+        session.id,
+        "assistant",
+        "找到的文件候选需要你确认：你要求 1 个，当前找到 2 个。\n"
+        "1. /tmp/report-final.txt\n2. /tmp/report-draft.txt",
+    )
+    current = store.add_message(session.id, "user", "第 2 个")
+    history = store.list_messages(session.id)
+
+    assert history[-1].id == current.id
+    assert service._requires_file_delivery(
+        "第 2 个", history, ChannelContext(channel="onebot", target="10001")
+    )
+    assert not service._requires_file_delivery(
+        "算了", history, ChannelContext(channel="onebot", target="10001")
+    )
+
+
+def test_natural_send_me_phrase_enables_file_delivery(engine, settings):
+    service, store, _ = _service(engine, settings, FindProvider(), [FileFindTool()])
+    session = store.create_session()
+    current = store.add_message(
+        session.id,
+        "user",
+        "小白，把桌面 new_trial 文件夹中一个 Methods_4改.docx 发我",
+    )
+    history = store.list_messages(session.id)
+
+    assert history[-1].id == current.id
+    assert service._requires_file_delivery(
+        current.content,
+        history,
+        ChannelContext(channel="onebot", target="10001"),
+    )
+
+
+def test_location_hint_overrides_model_wrong_root_and_delivers_recursively(
+    engine, settings, tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    target_dir = home / "Desktop" / "new_trial" / "Article"
+    target_dir.mkdir(parents=True)
+    target = target_dir / "Methods_4改.docx"
+    target.write_text("document", encoding="utf-8")
+    wrong_root = tmp_path / "project"
+    wrong_root.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    delivery = FakeDelivery()
+    service, store, _ = _service(
+        engine,
+        settings,
+        WrongRootFileDeliveryProvider(wrong_root),
+        [FileFindTool(), ChannelFileSendTool()],
+        delivery,
+    )
+    session = store.create_session()
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(
+                    session_id=session.id,
+                    text="小白 把桌面new_trial文件夹中一个Methods_4改.docx发我",
+                ),
+                ChannelContext(channel="onebot", target="10001"),
+            )
+        ]
+
+    events = asyncio.run(run())
+
+    assert delivery.sent == [("10001", str(target), "Methods_4改.docx")]
+    assert events[-1].type == "done"
+    assert events[-1].text == "已发送 1 个文件。"
+
+
+def test_local_model_receives_verified_recent_qq_attachment(engine, settings) -> None:
+    attachment = settings.data_dir / "qq_files" / "received-report.docx"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_bytes(b"docx")
+    service, store, _ = _service(
+        engine,
+        settings,
+        AttachmentContextProvider(attachment),
+        [],
+    )
+    session = store.create_session()
+    store.add_message(
+        session.id,
+        "user",
+        f"[QQ 文件] report.docx 已保存到 {attachment.resolve()}",
+    )
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="把这个文件移动到 Article 文件夹")
+            )
+        ]
+
+    events = asyncio.run(run())
+
+    assert events[-1].type == "done"
+    assert events[-1].text == "已识别附件。"

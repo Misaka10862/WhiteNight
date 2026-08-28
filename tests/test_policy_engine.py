@@ -64,6 +64,7 @@ def test_approval_scope_mismatch_rejected(engine: Engine) -> None:
 def test_approval_expires(engine: Engine) -> None:
     service = ApprovalService(engine, once_ttl=timedelta(seconds=-1))
     request = service.request("file.write", "medium", "once", '{"path":"/a"}')
+    assert service.list_pending() == []
     resolution = service.resolve_once(request.code)
     assert not resolution.ok
     assert "过期" in resolution.reason

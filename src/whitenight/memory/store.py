@@ -18,6 +18,7 @@ from whitenight.memory.types import (
 )
 from whitenight.storage.models import (
     EpisodicMemory,
+    MemoryExtractionCheckpoint,
     ProfileFact,
     SessionSummaryRecord,
 )
@@ -58,9 +59,14 @@ class MemoryStore:
 
     # ---- 结构化档案 ----------------------------------------------------
 
-    def list_facts(self, include_deleted: bool = False) -> list[FactRecord]:
+    def list_facts(
+        self, include_deleted: bool = False, character_id: str | None = None
+    ) -> list[FactRecord]:
         with self._orm() as orm:
-            rows = orm.query(ProfileFact).order_by(ProfileFact.updated_at.desc()).all()
+            query = orm.query(ProfileFact)
+            if character_id is not None:
+                query = query.filter(ProfileFact.character_id == character_id)
+            rows = query.order_by(ProfileFact.updated_at.desc()).all()
             records = [self._fact_record(row) for row in rows]
         if include_deleted:
             return records
@@ -80,7 +86,12 @@ class MemoryStore:
         with self._orm() as orm:
             existing = (
                 orm.query(ProfileFact)
-                .filter(ProfileFact.key == key, ProfileFact.status == "active")
+                .filter(
+                    ProfileFact.key == key,
+                    ProfileFact.status == "active",
+                    ProfileFact.character_id == candidate.character_id,
+                    ProfileFact.owner_namespace == candidate.owner_namespace,
+                )
                 .all()
             )
             matching = [fact for fact in existing if _normalize(fact.value) == value]
@@ -88,6 +99,8 @@ class MemoryStore:
 
             if not existing:
                 fact = ProfileFact(
+                    character_id=candidate.character_id,
+                    owner_namespace=candidate.owner_namespace,
                     key=key,
                     value=value,
                     confidence=candidate.confidence,
@@ -120,6 +133,8 @@ class MemoryStore:
                 fact.conflict_state = "conflicted"
                 fact.updated_at = now
             fact = ProfileFact(
+                character_id=candidate.character_id,
+                owner_namespace=candidate.owner_namespace,
                 key=key,
                 value=value,
                 confidence=candidate.confidence,
@@ -139,6 +154,8 @@ class MemoryStore:
             if old is None or old.status == "deleted":
                 raise MemoryNotFoundError(fact_id)
             new = ProfileFact(
+                character_id=old.character_id,
+                owner_namespace=old.owner_namespace,
                 key=old.key,
                 value=value,
                 confidence=old.confidence if confidence is None else confidence,
@@ -194,7 +211,9 @@ class MemoryStore:
             orm.commit()
             return None
 
-    def search_facts(self, query: str, limit: int = 10) -> list[FactRecord]:
+    def search_facts(
+        self, query: str, limit: int = 10, character_id: str | None = None
+    ) -> list[FactRecord]:
         tokens = re.findall(r"[\w\u4e00-\u9fff]+", query, re.UNICODE)
         if not tokens:
             return []
@@ -213,7 +232,12 @@ class MemoryStore:
             facts: list[ProfileFact] = []
             for fact_id in fact_ids:
                 fact = orm.get(ProfileFact, fact_id)
-                if fact and fact.status == "active":
+                if (
+                    fact
+                    and fact.status == "active"
+                    and fact.conflict_state != "conflicted"
+                    and (character_id is None or fact.character_id == character_id)
+                ):
                     facts.append(fact)
             if len(facts) < limit:
                 like = f"%{query}%"
@@ -221,6 +245,12 @@ class MemoryStore:
                     orm.query(ProfileFact)
                     .filter(
                         ProfileFact.status == "active",
+                        ProfileFact.conflict_state != "conflicted",
+                        *(
+                            (ProfileFact.character_id == character_id,)
+                            if character_id is not None
+                            else ()
+                        ),
                         (ProfileFact.key.like(like)) | (ProfileFact.value.like(like)),
                     )
                     .limit(limit - len(facts))
@@ -235,6 +265,8 @@ class MemoryStore:
     def add_episode(self, candidate: EpisodeCreate) -> EpisodeRecord:
         with self._orm() as orm:
             episode = EpisodicMemory(
+                character_id=candidate.character_id,
+                owner_namespace=candidate.owner_namespace,
                 content=_normalize(candidate.content),
                 source_message_ids=_dump_ids(candidate.source_message_ids),
                 confidence=candidate.confidence,
@@ -244,9 +276,14 @@ class MemoryStore:
             orm.commit()
             return self._episode_record(episode)
 
-    def list_episodes(self, include_deleted: bool = False) -> list[EpisodeRecord]:
+    def list_episodes(
+        self, include_deleted: bool = False, character_id: str | None = None
+    ) -> list[EpisodeRecord]:
         with self._orm() as orm:
-            rows = orm.query(EpisodicMemory).order_by(EpisodicMemory.created_at.desc()).all()
+            query = orm.query(EpisodicMemory)
+            if character_id is not None:
+                query = query.filter(EpisodicMemory.character_id == character_id)
+            rows = query.order_by(EpisodicMemory.created_at.desc()).all()
             records = [self._episode_record(row) for row in rows]
         if include_deleted:
             return records
@@ -276,7 +313,9 @@ class MemoryStore:
                 episode.last_accessed_at = _now()
                 orm.commit()
 
-    def search_episodes(self, query: str, limit: int = 10) -> list[EpisodeRecord]:
+    def search_episodes(
+        self, query: str, limit: int = 10, character_id: str | None = None
+    ) -> list[EpisodeRecord]:
         tokens = re.findall(r"[\w\u4e00-\u9fff]+", query, re.UNICODE)
         if not tokens:
             return []
@@ -295,7 +334,11 @@ class MemoryStore:
             episodes: list[EpisodicMemory] = []
             for episode_id in episode_ids:
                 episode = orm.get(EpisodicMemory, episode_id)
-                if episode and episode.deleted_at is None:
+                if (
+                    episode
+                    and episode.deleted_at is None
+                    and (character_id is None or episode.character_id == character_id)
+                ):
                     episodes.append(episode)
             if len(episodes) < limit:
                 like = f"%{query}%"
@@ -303,6 +346,11 @@ class MemoryStore:
                     orm.query(EpisodicMemory)
                     .filter(
                         EpisodicMemory.deleted_at.is_(None),
+                        *(
+                            (EpisodicMemory.character_id == character_id,)
+                            if character_id is not None
+                            else ()
+                        ),
                         EpisodicMemory.content.like(like),
                     )
                     .limit(limit - len(episodes))
@@ -341,6 +389,22 @@ class MemoryStore:
             )
             return record.summary if record else None
 
+    def get_extraction_checkpoint(self, session_id: str) -> int:
+        with self._orm() as orm:
+            row = orm.get(MemoryExtractionCheckpoint, session_id)
+            return row.last_sequence if row else 0
+
+    def set_extraction_checkpoint(self, session_id: str, sequence: int) -> None:
+        with self._orm() as orm:
+            row = orm.get(MemoryExtractionCheckpoint, session_id)
+            if row is None:
+                row = MemoryExtractionCheckpoint(session_id=session_id, last_sequence=sequence)
+                orm.add(row)
+            else:
+                row.last_sequence = max(row.last_sequence, sequence)
+                row.updated_at = _now()
+            orm.commit()
+
     # ---- helpers -------------------------------------------------------
 
     def _fact_record(self, fact: ProfileFact) -> FactRecord:
@@ -354,6 +418,8 @@ class MemoryStore:
             conflict_state=fact.conflict_state,  # type: ignore[arg-type]
             created_at=fact.created_at,
             updated_at=fact.updated_at,
+            character_id=fact.character_id,
+            owner_namespace=fact.owner_namespace,
         )
 
     def _episode_record(self, episode: EpisodicMemory) -> EpisodeRecord:
@@ -367,4 +433,6 @@ class MemoryStore:
             created_at=episode.created_at,
             updated_at=episode.updated_at,
             deleted_at=episode.deleted_at,
+            character_id=episode.character_id,
+            owner_namespace=episode.owner_namespace,
         )

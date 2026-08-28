@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import shutil
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
@@ -30,12 +31,15 @@ class HermesProcessManager:
         key_provider: Callable[[], str | None],
         startup_timeout_s: float = 45.0,
         managed: bool = True,
+        inference_base_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.command = command
         self.key_provider = key_provider
         self.startup_timeout_s = startup_timeout_s
         self.managed = managed
+        self.inference_base_url = inference_base_url
+        self._session_token = secrets.token_urlsafe(32)
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -53,10 +57,6 @@ class HermesProcessManager:
                     "Hermes Gateway 端口已被非托管进程占用；WhiteNight 不会连接或终止它"
                 )
             key = self.key_provider()
-            if not key:
-                raise DelegateUnavailableError(
-                    "DeepSeek API Key 未配置；运行 `uv run whitenight credentials set deepseek`"
-                )
             parsed = urlparse(self.base_url)
             if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
                 raise DelegateUnavailableError("托管 Hermes Gateway 必须使用本机 HTTP 回环地址")
@@ -68,7 +68,13 @@ class HermesProcessManager:
             if command is None:
                 raise DelegateUnavailableError(f"找不到 Hermes 命令：{self.command}")
             env = os.environ.copy()
-            env["DEEPSEEK_API_KEY"] = key
+            if key:
+                env["DEEPSEEK_API_KEY"] = key
+            if self.inference_base_url:
+                env["HERMES_BASE_URL"] = self.inference_base_url
+                env["HERMES_API_KEY"] = "no-key-required"
+                env["CUSTOM_BASE_URL"] = self.inference_base_url
+            env["HERMES_DASHBOARD_SESSION_TOKEN"] = self._session_token
             self._process = await asyncio.create_subprocess_exec(
                 command,
                 "serve",
@@ -94,6 +100,12 @@ class HermesProcessManager:
                 await asyncio.sleep(0.25)
             await self.stop()
             raise DelegateUnavailableError("Hermes Gateway 启动超时")
+
+    def websocket_url(self) -> str:
+        parsed = urlparse(self.base_url)
+        query = urlencode({"token": self._session_token}) if self.managed else ""
+        suffix = f"?{query}" if query else ""
+        return f"ws://{parsed.netloc}/api/ws{suffix}"
 
     async def health(self) -> dict[str, object]:
         return {
@@ -170,8 +182,7 @@ class ManagedHermesGatewayAdapter:
 
     async def submit(self, request: DelegationRequest) -> AsyncIterator[DelegateEvent]:
         await self.manager.ensure_started()
-        parsed = urlparse(self.base_url)
-        ws_url = f"ws://{parsed.netloc}/api/ws"
+        ws_url = self.manager.websocket_url()
         try:
             async with asyncio.timeout(self.timeout_s):
                 async with connect(ws_url, max_size=16 * 1024 * 1024) as websocket:
@@ -217,6 +228,10 @@ class ManagedHermesGatewayAdapter:
                         yield event
         except TimeoutError as exc:
             raise DelegateError("Hermes 任务超时") from exc
+        except DelegateError:
+            raise
+        except Exception as exc:
+            raise DelegateError(f"Hermes Gateway 通信失败：{type(exc).__name__}") from exc
         finally:
             self._runs.pop(request.task_id, None)
             for code, item in list(self._approvals.items()):

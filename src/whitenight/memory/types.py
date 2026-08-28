@@ -16,6 +16,8 @@ class FactCandidate(BaseModel):
     value: str = Field(max_length=2000)
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     source_message_ids: list[str] = Field(default_factory=list)
+    character_id: str | None = None
+    owner_namespace: str = "local-user"
 
 
 class EpisodeCandidate(BaseModel):
@@ -23,6 +25,8 @@ class EpisodeCandidate(BaseModel):
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     source_message_ids: list[str] = Field(default_factory=list)
+    character_id: str | None = None
+    owner_namespace: str = "local-user"
 
 
 class ExtractionResult(BaseModel):
@@ -40,6 +44,8 @@ class FactRecord(BaseModel):
     conflict_state: ConflictState = "none"
     created_at: datetime
     updated_at: datetime
+    character_id: str | None = None
+    owner_namespace: str = "local-user"
 
 
 class EpisodeRecord(BaseModel):
@@ -52,6 +58,8 @@ class EpisodeRecord(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    character_id: str | None = None
+    owner_namespace: str = "local-user"
 
 
 class MemoryHit(BaseModel):
@@ -68,6 +76,8 @@ class FactUpsert(BaseModel):
     value: str = Field(max_length=2000)
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     source_message_ids: list[str] = Field(default_factory=list)
+    character_id: str | None = None
+    owner_namespace: str = "local-user"
 
 
 class FactUpdate(BaseModel):
@@ -80,3 +90,5 @@ class EpisodeCreate(BaseModel):
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     source_message_ids: list[str] = Field(default_factory=list)
+    character_id: str | None = None
+    owner_namespace: str = "local-user"

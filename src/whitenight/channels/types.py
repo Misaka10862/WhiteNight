@@ -32,6 +32,9 @@ class ChatAttachment(BaseModel):
 
 class SessionCreate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
+    character_id: str | None = None
+    persona_id: str | None = None
+    greeting_index: int | None = Field(default=None, ge=0, le=100)
 
 
 class SessionSummary(BaseModel):
@@ -40,6 +43,10 @@ class SessionSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: int = 0
+    character_id: str | None = None
+    persona_id: str | None = None
+    character_name: str | None = None
+    character_avatar_path: str | None = None
 
 
 class MessageRecord(BaseModel):

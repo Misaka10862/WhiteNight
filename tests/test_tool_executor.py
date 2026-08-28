@@ -14,6 +14,7 @@ from whitenight.policy.risk import RiskLevel
 from whitenight.tools import (
     FileCreateTool,
     FileDeleteTool,
+    FileMoveTool,
     FileReadTool,
     FileWriteTool,
     ScreenshotTool,
@@ -176,6 +177,59 @@ def test_invalid_params_refused_before_execution(executor) -> None:
     outcome = tool.execute("file.read", {"path": str(tmp / "nope"), "max_chars": -1})
     assert outcome.status == "refused"
     assert "参数不合法" in outcome.message
+
+
+def test_move_preparation_accepts_directory_and_preserves_filename(tmp_path: Path) -> None:
+    source = tmp_path / "incoming" / "report.docx"
+    source.parent.mkdir()
+    source.write_bytes(b"docx")
+    destination_dir = tmp_path / "Article"
+    destination_dir.mkdir()
+    tool = FileMoveTool()
+
+    metadata = tool.approval_metadata(
+        tool.validate({"source": str(source), "destination": str(destination_dir)}),
+        ToolContext(data_dir=str(tmp_path)),
+    )
+
+    prepared = metadata["prepared_params"]
+    assert isinstance(prepared, dict)
+    assert prepared["destination"] == str(destination_dir / source.name)
+
+
+def test_move_preparation_restores_qq_attachment_display_name(tmp_path: Path) -> None:
+    source = tmp_path / "qq_files" / "c04acd30-166c-4510-9625-d0c5271b4016-report.docx"
+    source.parent.mkdir()
+    source.write_bytes(b"docx")
+    destination_dir = tmp_path / "Article"
+    destination_dir.mkdir()
+    tool = FileMoveTool()
+
+    metadata = tool.approval_metadata(
+        tool.validate({"source": str(source), "destination": str(destination_dir)}),
+        ToolContext(data_dir=str(tmp_path)),
+    )
+
+    prepared = metadata["prepared_params"]
+    assert isinstance(prepared, dict)
+    assert prepared["destination"] == str(destination_dir / "report.docx")
+
+
+def test_move_preparation_rejects_missing_destination_directory(tmp_path: Path) -> None:
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"docx")
+    tool = FileMoveTool()
+
+    with pytest.raises(ValueError, match="目标目录不存在"):
+        tool.approval_metadata(
+            tool.validate(
+                {
+                    "source": str(source),
+                    "destination": str(tmp_path / "missing" / "report.docx"),
+                }
+            ),
+            ToolContext(data_dir=str(tmp_path)),
+        )
 
 
 def test_screenshot_is_readonly_and_auto(engine: Engine, tmp_path: Path, monkeypatch) -> None:

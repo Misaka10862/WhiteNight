@@ -140,7 +140,15 @@ def preview_directory(tmp_dir: Path) -> dict[str, object]:
             ).fetchall()
         }
         counts: dict[str, object] = {}
-        for table in ("sessions", "messages", "profile_facts", "episodic_memories", "agent_tasks"):
+        for table in (
+            "sessions",
+            "messages",
+            "profile_facts",
+            "episodic_memories",
+            "character_profiles",
+            "lorebooks",
+            "agent_tasks",
+        ):
             if table in tables:
                 counts[table] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         attachments = tmp_dir / "attachments"

@@ -43,8 +43,8 @@ class MemoryService:
 
     # ---- 结构化档案 ----------------------------------------------------
 
-    def list_facts(self) -> list[FactRecord]:
-        return self._store.list_facts()
+    def list_facts(self, character_id: str | None = None) -> list[FactRecord]:
+        return self._store.list_facts(character_id=character_id)
 
     def upsert_fact(self, payload: FactUpsert) -> FactRecord:
         return self._store.upsert_fact(payload)
@@ -72,8 +72,8 @@ class MemoryService:
     def add_episode(self, payload: EpisodeCreate) -> EpisodeRecord:
         return self._store.add_episode(payload)
 
-    def list_episodes(self) -> list[EpisodeRecord]:
-        return self._store.list_episodes()
+    def list_episodes(self, character_id: str | None = None) -> list[EpisodeRecord]:
+        return self._store.list_episodes(character_id=character_id)
 
     def delete_episode(self, episode_id: str) -> None:
         self._store.delete_episode(episode_id)
@@ -90,18 +90,25 @@ class MemoryService:
     # ---- 提取与召回 ----------------------------------------------------
 
     async def extract_and_store(
-        self, messages: list[MessageRecord], session_id: str
+        self, messages: list[MessageRecord], session_id: str, character_id: str | None = None
     ) -> dict[str, int]:
         """主回复后异步调用：候选去重、冲突检测后写入。"""
+        latest_sequence = max((message.sequence for message in messages), default=0)
+        if latest_sequence <= self._store.get_extraction_checkpoint(session_id):
+            return {"facts_added": 0, "episodes_added": 0}
         result = await self._extractor.extract(messages)
         facts_added = 0
         for candidate in result.facts:
-            existing = self._find_active_fact(candidate.key)
+            candidate.character_id = character_id
+            existing = self._find_active_fact(candidate.key, character_id)
             stored = self._store.upsert_fact(candidate)
             if existing is None or existing.id != stored.id:
                 facts_added += 1
         episodes_added = 0
-        existing_episodes = {_normalize(item.content) for item in self._store.list_episodes()}
+        existing_episodes = {
+            _normalize(item.content)
+            for item in self._store.list_episodes(character_id=character_id)
+        }
         for episode_candidate in result.episodes:
             normalized = _normalize(episode_candidate.content)
             if normalized and normalized not in existing_episodes:
@@ -111,21 +118,25 @@ class MemoryService:
                         confidence=episode_candidate.confidence,
                         importance=episode_candidate.importance,
                         source_message_ids=episode_candidate.source_message_ids,
+                        character_id=character_id,
                     )
                 )
                 existing_episodes.add(normalized)
                 episodes_added += 1
+        self._store.set_extraction_checkpoint(session_id, latest_sequence)
         return {"facts_added": facts_added, "episodes_added": episodes_added}
 
-    def _find_active_fact(self, key: str) -> FactRecord | None:
+    def _find_active_fact(self, key: str, character_id: str | None = None) -> FactRecord | None:
         normalized_key = _normalize(key)
-        for fact in self._store.list_facts():
+        for fact in self._store.list_facts(character_id=character_id):
             if _normalize(fact.key) == normalized_key and fact.status == "active":
                 return fact
         return None
 
-    def retrieve(self, query: str, limit: int = 8) -> list[MemoryHit]:
-        return self.retriever.retrieve(query, limit=limit)
+    def retrieve(
+        self, query: str, limit: int = 8, character_id: str | None = None
+    ) -> list[MemoryHit]:
+        return self.retriever.retrieve(query, limit=limit, character_id=character_id)
 
     # ---- 滚动摘要 ------------------------------------------------------
 

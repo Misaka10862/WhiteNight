@@ -10,6 +10,12 @@ After the high-risk capability verification in Phase 1 is completed, use the act
 - Implementation: Ollama (Phase 1 validation `qwen3-vl:8b`) with OpenAI-compatible Chat Completions;
   Cloud credentials are only read from Keychain, still using local Ollama by default.
 
+## TokenCounter
+
+- `count_text(text) -> int | None` and `count_request(messages, tools) -> int | None`;
+- a local `tokenizer.json` provides exact tokenizer counts without loading model weights;
+- unavailable counters return `None`; they never present character-count estimates as exact tokens.
+
 ## SearchProvider
 
 - `search(query) -> list[SearchResult]`: `{title, url, snippet, retrieved_at}`, retain the source;

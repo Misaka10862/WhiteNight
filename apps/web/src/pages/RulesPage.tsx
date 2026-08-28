@@ -26,7 +26,7 @@ export default function RulesPage() {
     <section className="page" aria-label="临时约束">
       <h2>临时约束文件</h2>
       <p className="hint">
-        SOUL.md 承载初期人格；AGENTS.md 是工程规则。两者可查看可编辑，安全与权限约束不能被聊天内容修改。
+        SOUL.md 仅用于默认小白的迁移与故障回退；日常角色编辑请使用“角色”页。AGENTS.md 是工程规则，安全与权限约束不由这两个文件控制。
       </p>
       <div className="tabs">
         {(['SOUL', 'AGENTS'] as const).map((name) => (
