@@ -4,6 +4,8 @@
 
 WhiteNight is a local-first personal AI agent for macOS. It provides a unified interface for conversation, memory, tool execution, and channel integrations, with an emphasis on auditable authorization, credential isolation, and replaceable Provider interfaces.
 
+In addition to practical automation, WhiteNight includes dedicated optimizations for emotionally attentive companionship. Persona-aware prompting, long-term memory, continuity across sessions, context-sensitive tone, and optional proactive messaging are designed to support a more consistent and respectful relationship over time while preserving explicit safety and permission boundaries.
+
 The default configuration uses the local Ollama `qwen3:8b` text model with persona context from `SOUL.md`. WhiteNight also supports OpenAI-compatible Chat Completions APIs. When a cloud Provider is enabled, its API key is read exclusively from macOS Keychain.
 
 ## Features
@@ -11,6 +13,7 @@ The default configuration uses the local Ollama `qwen3:8b` text model with perso
 - Local WebUI with streaming chat, session recovery, and image attachments
 - QQ private messaging through OneBot/NapCat, with allowlisting, rate limiting, deduplication, and message splitting
 - Long-term memory for facts, episodes, summaries, retrieval, and export
+- Emotionally attentive companionship with persona continuity, contextual tone, and relationship-aware memory
 - File, document, web, and OCR tools guarded by policy and approval layers
 - Optional Hermes and explicit `/codex` delegation adapters with standardized task events
 - Ollama and OpenAI-compatible model Providers
@@ -19,6 +22,11 @@ The default configuration uses the local Ollama `qwen3:8b` text model with perso
 Hermes delegation is disabled by default while WhiteNight's native tool layer is being expanded.
 Set `hermes_enabled: true` only when the Hermes gateway is intentionally configured. Codex is
 invoked only by starting a message with `/codex`; ordinary coding requests stay in WhiteNight.
+
+The current distribution targets macOS and QQ through OneBot/NapCat. Its channel and Provider
+boundaries are deliberately kept replaceable so that broader chat-platform coverage and support
+for additional operating systems can be introduced incrementally without changing the core
+conversation, memory, policy, and personality model.
 
 ## Repository Layout
 

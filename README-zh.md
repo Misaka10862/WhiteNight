@@ -4,6 +4,8 @@
 
 WhiteNight（白夜，小白）是一个面向 macOS 的本地优先个人 AI Agent，提供统一的对话、记忆、工具调用和渠道接入能力。项目强调可审计的权限控制、凭据隔离和可替换的 Provider 接口。
 
+除实用的自动化能力外，WhiteNight 还针对细腻、连续的情感陪伴进行了专门优化：通过人格感知提示、长期记忆、跨会话连续性、基于语境的语气调整和可选的主动消息，支持更稳定、更尊重用户边界的长期关系体验，同时始终保留明确的安全与权限边界。
+
 当前默认配置使用本地 Ollama `qwen3:8b` 文本模型，并通过 `SOUL.md` 提供人格上下文。项目同时支持 OpenAI-compatible Chat Completions API；启用云端 Provider 后，API Key 仅从 macOS Keychain 读取。
 
 ## 功能概览
@@ -11,6 +13,7 @@ WhiteNight（白夜，小白）是一个面向 macOS 的本地优先个人 AI Ag
 - 本地 WebUI，支持流式聊天、会话恢复和图片附件
 - QQ 私聊接入（OneBot/NapCat），包含白名单、限频、去重和消息分片
 - 长期记忆：事实、情景记忆、摘要、检索与导出
+- 面向情感陪伴的优化：人格连续性、语境化语气和关系感知记忆
 - 文件、文档、网页和 OCR 工具，统一经过策略与审批层
 - 可选 Hermes 与显式 `/codex` 委派接口，以及标准化任务事件
 - Ollama 与 OpenAI-compatible 模型 Provider
@@ -18,6 +21,8 @@ WhiteNight（白夜，小白）是一个面向 macOS 的本地优先个人 AI Ag
 
 Hermes 委派默认暂时关闭，电脑操作请求留在小白本体的工具层。只有以 `/codex` 开头的消息
 才会调用 Codex；普通编码请求继续由小白处理。
+
+当前版本面向 macOS，并通过 OneBot/NapCat 接入 QQ。渠道与 Provider 均保持可替换，后续可在不改变核心对话、记忆、权限和人格模型的前提下，逐步扩展到更多操作系统与更广泛的聊天软件。
 
 ## 项目结构
 
