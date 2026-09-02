@@ -12,9 +12,12 @@ WhiteNight（白夜，小白）是一个面向 macOS 的本地优先个人 AI Ag
 - QQ 私聊接入（OneBot/NapCat），包含白名单、限频、去重和消息分片
 - 长期记忆：事实、情景记忆、摘要、检索与导出
 - 文件、文档、网页和 OCR 工具，统一经过策略与审批层
-- Hermes/Codex 委派接口，以及标准化任务事件
+- 可选 Hermes 与显式 `/codex` 委派接口，以及标准化任务事件
 - Ollama 与 OpenAI-compatible 模型 Provider
 - 加密备份、诊断、日志脱敏和安全回归测试
+
+Hermes 委派默认暂时关闭，电脑操作请求留在小白本体的工具层。只有以 `/codex` 开头的消息
+才会调用 Codex；普通编码请求继续由小白处理。
 
 ## 项目结构
 

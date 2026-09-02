@@ -1,13 +1,16 @@
-"""OneBot 11 发送器：私聊文字/文件 + 限频 + 分片 + 有限重试。"""
+"""OneBot 11 发送器：私聊文字/原生表情/文件 + 限频 + 分片 + 有限重试。"""
 
 from __future__ import annotations
 
 import base64
+import logging
 import time
 from pathlib import Path
 from typing import cast
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class OneBotSendError(RuntimeError):
@@ -50,6 +53,7 @@ class OneBotSender:
         self.timeout = httpx.Timeout(timeout_s, connect=5.0)
         self.max_attempts = max_attempts
         self._transport = transport
+        self._last_error: str | None = None
 
     def _client(self) -> httpx.Client:
         return httpx.Client(timeout=self.timeout, trust_env=False, transport=self._transport)
@@ -63,6 +67,32 @@ class OneBotSender:
             self._post("/send_private_msg", json={"user_id": user_id, "message": chunk})
             sent += 1
         return sent
+
+    def send_private_mface(
+        self,
+        user_id: int,
+        *,
+        segment_type: str,
+        emoji_id: str,
+        emoji_package_id: str | None = None,
+        key: str | None = None,
+    ) -> int:
+        """Send a registered QQ native animated/custom face segment."""
+        if segment_type not in {"mface", "market_face"} or not emoji_id:
+            raise OneBotSendError("QQ 原生表情标识不完整")
+        data: dict[str, str] = {"emoji_id": emoji_id}
+        if emoji_package_id:
+            data["emoji_package_id"] = emoji_package_id
+        if key:
+            data["key"] = key
+        self._post(
+            "/send_private_msg",
+            json={
+                "user_id": user_id,
+                "message": [{"type": segment_type, "data": data}],
+            },
+        )
+        return 1
 
     def upload_private_file(self, user_id: int, path: str | Path, name: str) -> None:
         path = Path(path)
@@ -89,6 +119,77 @@ class OneBotSender:
             raise OneBotSendError("OneBot get_file 返回缺少 data")
         return cast(dict[str, object], data)
 
+    def get_message(self, message_id: int | str) -> dict[str, object]:
+        """Fetch the original OneBot message referenced by a reply segment."""
+        payload = self._post("/get_msg", json={"message_id": message_id})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise OneBotSendError("OneBot get_msg 返回缺少 data")
+        return cast(dict[str, object], data)
+
+    def get_image(self, file_id: str) -> dict[str, object]:
+        """Resolve an image reference through OneBot's standard get_image action."""
+        payload = self._post("/get_image", json={"file": file_id})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise OneBotSendError("OneBot get_image 返回缺少 data")
+        return cast(dict[str, object], data)
+
+    def health(self) -> bool:
+        """Return whether the OneBot HTTP endpoint is reachable and logged in."""
+        return bool(self.health_detail()["logged_in"])
+
+    def health_detail(self) -> dict[str, object]:
+        """Return safe, structured OneBot reachability/login diagnostics."""
+        try:
+            with self._client() as client:
+                response = client.get(f"{self.api_url}/get_login_info")
+            if response.status_code != 200:
+                return {
+                    "reachable": True,
+                    "logged_in": False,
+                    "http_status": response.status_code,
+                    "reason": "http_error",
+                    "last_error": self._last_error,
+                }
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return {
+                    "reachable": True,
+                    "logged_in": False,
+                    "reason": "invalid_json",
+                    "last_error": self._last_error,
+                }
+            ok = payload.get("status") == "ok" and payload.get("retcode", 0) == 0
+            return {
+                "reachable": True,
+                "logged_in": bool(ok),
+                "reason": "ok" if ok else "not_logged_in",
+                "last_error": self._last_error,
+            }
+        except httpx.ConnectError:
+            return {
+                "reachable": False,
+                "logged_in": False,
+                "reason": "connection_refused",
+                "last_error": self._last_error,
+            }
+        except httpx.TimeoutException:
+            return {
+                "reachable": False,
+                "logged_in": False,
+                "reason": "timeout",
+                "last_error": self._last_error,
+            }
+        except (httpx.HTTPError, ValueError):
+            logger.debug("OneBot health probe failed", exc_info=True)
+            return {
+                "reachable": False,
+                "logged_in": False,
+                "reason": "probe_failed",
+                "last_error": self._last_error,
+            }
+
     def _post(
         self,
         endpoint: str,
@@ -102,6 +203,7 @@ class OneBotSender:
                     response = client.post(f"{self.api_url}{endpoint}", json=json)
             except httpx.HTTPError as exc:
                 last_error = str(exc)
+                self._last_error = f"{type(exc).__name__}: {last_error[:200]}"
                 if attempt < self.max_attempts:
                     time.sleep(0.5 * attempt)
                     continue
@@ -110,18 +212,23 @@ class OneBotSender:
             body = response.text[:1000]
             if response.status_code >= 500:
                 last_error = f"HTTP {response.status_code}: {body}"
+                self._last_error = f"HTTP {response.status_code}"
                 if attempt < self.max_attempts:
                     time.sleep(0.5 * attempt)
                     continue
                 break
             if response.status_code != 200:
+                self._last_error = f"HTTP {response.status_code}"
                 raise OneBotSendError(f"HTTP {response.status_code}: {body}")
             try:
                 payload = response.json()
             except ValueError as exc:
+                self._last_error = "invalid_json"
                 raise OneBotSendError("OneBot 返回了无效 JSON") from exc
             if payload.get("retcode") not in (0, None) or payload.get("status") == "failed":
+                self._last_error = "onebot_business_error"
                 raise OneBotSendError(str(payload))
+            self._last_error = None
             return dict(payload)
         raise OneBotSendError(last_error)
 

@@ -195,7 +195,7 @@ export type ChatEvent =
       session_id?: string | null
       message_id?: string | null
       text?: string | null
-      extra?: { task_id?: string | null; user_message_id?: string | null }
+      extra?: { task_id?: string | null; user_message_id?: string | null; sticker_ids?: string[] }
     }
   | { type: 'error'; message?: string | null }
   | { type: 'task'; extra?: { delegate_event?: DelegateEvent } }
@@ -285,15 +285,40 @@ export interface SystemHealth {
   database: { backend: string; reachable: boolean }
   model: Record<string, unknown>
   delegates: Record<string, Record<string, unknown>>
-  onebot?: { enabled: boolean; owner_ids: number[]; api_url: string }
+  onebot?: {
+    enabled: boolean
+    owner_ids: number[]
+    api_url: string
+    health?: { reachable: boolean; logged_in: boolean; reason: string; http_status?: number; last_error?: string | null }
+    stickers?: { configured: boolean; native_ready: number }
+  }
 }
 
 export interface ModelConfig {
+  provider: 'ollama' | 'openai'
+  providers: Array<'ollama' | 'openai'>
+  model_name: string
+  base_url: string
+  api_key_account: string
+  api_key_configured: boolean
   ollama_keep_alive: string
   options: string[]
   tokenizer_path: string
   tokenizer_available: boolean
   context_tokens: number
+}
+
+export interface ModelProviderUpdate {
+  provider: 'ollama' | 'openai'
+  model_name: string
+  base_url: string
+  api_key?: string
+}
+
+export interface ModelListRequest {
+  provider: 'ollama' | 'openai'
+  base_url: string
+  api_key?: string
 }
 
 export interface ProactiveConfig {
@@ -312,6 +337,14 @@ export interface ProactiveStatus {
   last_activity_at: string | null
   last_sent_at: string | null
   next_candidate_at: string | null
+  delivery?: {
+    configured_sender: 'log' | 'none' | 'qq'
+    active_sender: 'log' | 'none' | 'qq' | 'unavailable'
+    target_user_id: number | null
+    onebot_reachable: boolean | null
+    available: boolean
+    reason: string
+  }
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -431,6 +464,26 @@ export const revokeGrant = (id: string) =>
   jsonFetch<void>(`/api/v1/policy/grants/${id}`, { method: 'DELETE' })
 export const fetchSystemHealth = () => jsonFetch<SystemHealth>('/api/v1/system/health')
 export const fetchModelConfig = () => jsonFetch<ModelConfig>('/api/v1/model/config')
+export const updateModelProvider = (config: ModelProviderUpdate) =>
+  jsonFetch<{
+    provider: 'ollama' | 'openai'
+    model_name: string
+    base_url: string
+    api_key_configured: boolean
+    persisted: boolean
+  }>('/api/v1/model/provider', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+export const fetchAvailableModels = (request: ModelListRequest) =>
+  jsonFetch<{ provider: 'ollama' | 'openai'; models: string[] }>('/api/v1/model/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+export const restartService = () =>
+  jsonFetch<{ accepted: boolean; service: string }>('/api/v1/service/restart', { method: 'POST' })
 export const updateModelKeepAlive = (ollama_keep_alive: string) =>
   jsonFetch<{ ollama_keep_alive: string; persisted: boolean }>('/api/v1/model/config', {
     method: 'PUT',
@@ -510,20 +563,6 @@ export async function fetchLogs(lines = 200): Promise<string> {
   if (!response.ok) throw new Error(`logs failed: ${response.status}`)
   return response.text()
 }
-export const fetchRuleFile = async (name: 'SOUL' | 'AGENTS'): Promise<string> => {
-  const response = await fetch(`/api/v1/rules/${name}`)
-  if (!response.ok) throw new Error(`rule ${name} failed: ${response.status}`)
-  return response.text()
-}
-export const saveRuleFile = async (name: 'SOUL' | 'AGENTS', content: string): Promise<void> => {
-  const response = await fetch(`/api/v1/rules/${name}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  })
-  if (!response.ok) throw new Error(`save ${name} failed: ${response.status}`)
-}
-
 export function chatWebSocketUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return `${protocol}://${window.location.host}/api/v1/chat/ws`

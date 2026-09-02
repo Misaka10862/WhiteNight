@@ -3,12 +3,18 @@
 from whitenight.scheduler.poisson import next_candidate
 from whitenight.scheduler.service import LogSender, NullSender, ProactiveService
 from whitenight.scheduler.store import ProactiveStore
-from whitenight.scheduler.types import ProactiveConfig, ProactiveStatus, SendOutcome
+from whitenight.scheduler.types import (
+    ProactiveConfig,
+    ProactiveDelivery,
+    ProactiveStatus,
+    SendOutcome,
+)
 
 __all__ = [
     "LogSender",
     "NullSender",
     "ProactiveConfig",
+    "ProactiveDelivery",
     "ProactiveService",
     "ProactiveStatus",
     "ProactiveStore",

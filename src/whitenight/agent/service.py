@@ -32,7 +32,9 @@ from whitenight.policy.approvals import ApprovalService
 from whitenight.policy.engine import ApprovalMode, PolicyEngine
 from whitenight.routing.engine import RoutingEngine
 from whitenight.routing.models import ExecutorChoice
+from whitenight.routing.rules import extract_codex_prompt
 from whitenight.scheduler.service import ProactiveService
+from whitenight.stickers.catalog import StickerCatalog
 from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
 from whitenight.tools.base import FileDeliveryProvider, ToolRegistry, ToolResult
@@ -93,6 +95,7 @@ class ChatService:
         file_delivery: FileDeliveryProvider | None = None,
         prompt_compiler: PromptCompiler | None = None,
         personality_store: PersonalityStore | None = None,
+        sticker_catalog: StickerCatalog | None = None,
     ) -> None:
         self._store = store
         self._provider = provider
@@ -109,6 +112,7 @@ class ChatService:
         self._file_delivery = file_delivery
         self._prompt_compiler = prompt_compiler
         self._personalities = personality_store
+        self._sticker_catalog = sticker_catalog
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._extract_delay_s = 15.0
         self._extract_task: asyncio.Task[None] | None = None
@@ -116,6 +120,10 @@ class ChatService:
     @property
     def provider(self) -> ModelProvider:
         return self._provider
+
+    def set_provider(self, provider: ModelProvider) -> None:
+        """Replace the provider for future chat and summary requests."""
+        self._provider = provider
 
     async def stream_reply(
         self, request: ChatRequest, channel_context: ChannelContext | None = None
@@ -159,6 +167,18 @@ class ChatService:
         yield ChatEvent(type="start", session_id=session_id)
 
         plan = await self._router.route(request.text, has_image=image_path is not None)
+        codex_prompt = extract_codex_prompt(request.text)
+        if codex_prompt == "":
+            reply = "请在 /codex 后写明要交给 Codex 的具体任务。"
+            message = self._persist_assistant(session_id, reply)
+            yield ChatEvent(
+                type="done",
+                session_id=session_id,
+                message_id=message.id,
+                text=reply,
+                extra={"user_message_id": user_message.id},
+            )
+            return
         if (
             plan.executor in {ExecutorChoice.HERMES, ExecutorChoice.CODEX}
             and self._delegates is not None
@@ -166,7 +186,7 @@ class ChatService:
             history = self._store.list_messages(session_id)
             async for event in self._delegate_reply(
                 session_id,
-                self._delegation_prompt(request.text, history),
+                self._delegation_prompt(codex_prompt or request.text, history),
                 plan,
                 trusted_channel,
                 request.image_data_url,
@@ -174,7 +194,13 @@ class ChatService:
                 yield event
             return
 
-        if image_path is not None and not self._settings.model_supports_vision:
+        provider_vision = getattr(self._provider, "supports_vision", None)
+        supports_vision = (
+            self._settings.model_supports_vision
+            if self._settings.model_supports_vision is not None
+            else bool(provider_vision)
+        )
+        if image_path is not None and not supports_vision:
             reply = (
                 "主人，现在临时使用文本模型（qwen3:8b），暂时看不了图片。"
                 "等正式 LoRA 视觉模型完成并切回来后，我马上就能看图啦。"
@@ -195,6 +221,19 @@ class ChatService:
                 request.text, history, trusted_channel
             )
             runtime_constraints: list[str] = []
+            sticker_available = bool(
+                trusted_channel.channel == "onebot"
+                and trusted_channel.target
+                and self._sticker_catalog is not None
+                and self._sticker_catalog.records(native_only=True)
+            )
+            if sticker_available and self._sticker_catalog is not None:
+                runtime_constraints.append(
+                    "本轮可选情绪表情包（仅供 QQ 私聊使用）。请像真人一样自行判断是否需要发送；"
+                    "严肃、任务型或无明确情绪时通常不要发送。每轮最多选择一张，先完成文字回复，"
+                    "服务端会在文字之后发送图片。只可选择下列 ID，不要臆造 ID：\n"
+                    + self._sticker_catalog.prompt_text(native_only=True)
+                )
             recent_attachment = self._recent_qq_attachment(history)
             if recent_attachment is not None:
                 attachment_name, attachment_path = recent_attachment
@@ -226,6 +265,8 @@ class ChatService:
             enabled_tool_names = set(self._tools.names()) if self._tools else set()
             if not file_delivery_required:
                 enabled_tool_names.discard("channel.file.send")
+            if not sticker_available:
+                enabled_tool_names.discard("channel.sticker.send")
             tool_specs = (
                 self._tools.specs(enabled_tool_names)
                 if self._tools and self._tool_executor and supports_tools
@@ -250,6 +291,7 @@ class ChatService:
                     ProviderMessage(role="system", content=item) for item in runtime_constraints
                 )
             advertised_tool_names = {spec.name for spec in tool_specs or []}
+            selected_sticker_ids: list[str] = []
             for _round in range(8):
                 turn_parts: list[str] = []
                 calls = []
@@ -370,6 +412,9 @@ class ChatService:
                     raise RuntimeError(
                         "模型调用了当前请求未开放的工具：" + ", ".join(unavailable_calls)
                     )
+                sticker_calls = [call for call in calls if call.name == "channel.sticker.send"]
+                if len(sticker_calls) > 1 or (sticker_calls and selected_sticker_ids):
+                    raise RuntimeError("每轮最多发送一张表情包")
                 call_keys = [
                     json.dumps(
                         {"name": call.name, "arguments": call.arguments},
@@ -423,6 +468,14 @@ class ChatService:
                         waiting.append((call, outcome))
                     else:
                         self._record_file_goal_result(call, outcome, discovered_paths, sent_paths)
+                        if (
+                            call.name == "channel.sticker.send"
+                            and outcome.status == "ok"
+                            and outcome.result is not None
+                        ):
+                            sticker_id = outcome.result.metadata.get("sticker_id")
+                            if isinstance(sticker_id, str):
+                                selected_sticker_ids.append(sticker_id)
                         if (
                             call.name == "file.find"
                             and outcome.status == "ok"
@@ -503,7 +556,10 @@ class ChatService:
                         session_id=session_id,
                         message_id=assistant_message.id,
                         text=reply,
-                        extra={"user_message_id": user_message.id},
+                        extra={
+                            "user_message_id": user_message.id,
+                            "sticker_ids": selected_sticker_ids,
+                        },
                     )
                     return
                 if file_delivery_required and self._file_delivery_complete(
@@ -540,7 +596,7 @@ class ChatService:
             session_id=session_id,
             message_id=assistant_message.id,
             text=reply,
-            extra={"user_message_id": user_message.id},
+            extra={"user_message_id": user_message.id, "sticker_ids": selected_sticker_ids},
         )
 
     async def resume_approval(self, code: str, channel_context: ChannelContext) -> list[ChatEvent]:
@@ -670,6 +726,8 @@ class ChatService:
             if self._tools and supports_tools
             else None
         )
+        if tool_specs is not None:
+            tool_specs = [spec for spec in tool_specs if spec.name != "channel.sticker.send"]
         advertised_tool_names = {spec.name for spec in tool_specs or []}
         try:
             for _round in range(8):
@@ -1115,6 +1173,7 @@ def create_chat_service(
     file_delivery: FileDeliveryProvider | None = None,
     prompt_compiler: PromptCompiler | None = None,
     personality_store: PersonalityStore | None = None,
+    sticker_catalog: StickerCatalog | None = None,
 ) -> ChatService:
     """Provider 未配置或测试注入时降级为 DummyProvider（开发环境显式选择）。"""
     return ChatService(
@@ -1133,4 +1192,5 @@ def create_chat_service(
         file_delivery,
         prompt_compiler,
         personality_store,
+        sticker_catalog,
     )

@@ -1,6 +1,6 @@
 """路由引擎：规则优先 → 可选 LLM 结构化输出 → 本地兜底。
 
-失败升级：本地工具连续失败允许升级 Hermes；任何委派都不降低审批等级。
+失败升级：本地工具连续失败可在启用时升级 Hermes；任何委派都不降低审批等级。
 """
 
 from __future__ import annotations
@@ -32,15 +32,28 @@ class OllamaRoutingRouter:
         "把用户消息分类。只输出 JSON，字段：category（chat/companionship/"
         "image_qa/memory/search/file_op/gui/code）、executor（whitenight/"
         "hermes/codex）、risk（read_only/low_write/medium/high）、"
-        "confidence（0-1）、reason。编码类用 codex；GUI/跨应用用 hermes；"
-        "其余用 whitenight。\n"
+        "confidence（0-1）、reason。除非用户消息以 /codex 开头，否则编码类也用 "
+        "whitenight；GUI/跨应用仅在 Hermes 启用时用 hermes；其余用 whitenight。\n"
     )
 
-    def __init__(self, provider: ModelProvider) -> None:
+    def __init__(self, provider: ModelProvider, allow_hermes: bool = False) -> None:
+        self._provider = provider
+        self._allow_hermes = allow_hermes
+
+    def set_provider(self, provider: ModelProvider) -> None:
+        """Replace the provider used by future routing requests."""
         self._provider = provider
 
     async def route(self, text: str, has_image: bool = False) -> RoutingPlan | None:
-        prompt = self._PROMPT + f"has_image={has_image}\n用户消息：{text}"
+        prompt = (
+            self._PROMPT
+            + (
+                "Hermes 当前已禁用，GUI/跨应用任务请使用 whitenight。\n"
+                if not self._allow_hermes
+                else ""
+            )
+            + f"has_image={has_image}\n用户消息：{text}"
+        )
         try:
             chunks = self._provider.stream_chat([ProviderMessage(role="user", content=prompt)])
             parts: list[str] = []
@@ -54,7 +67,15 @@ class OllamaRoutingRouter:
             if not match:
                 return None
             payload = json.loads(match.group(0))
-            return RoutingPlan.model_validate(payload)
+            plan = RoutingPlan.model_validate(payload)
+            if not self._allow_hermes and plan.executor is ExecutorChoice.HERMES:
+                plan = plan.model_copy(
+                    update={
+                        "executor": ExecutorChoice.WHITENIGHT,
+                        "reason": "Hermes 暂时禁用，由小白本体处理 GUI/跨应用任务",
+                    }
+                )
+            return plan
         except Exception as exc:
             logger.warning("LLM 路由失败，回退规则/本地：%s", exc)
             return None
@@ -92,6 +113,10 @@ class RoutingEngine:
 
         if user_override:
             override = user_override.strip().lower()
+            if override == "codex" and not text.lstrip().lower().startswith("/codex"):
+                override = ""
+            if override == "hermes" and not self._rules.allow_hermes:
+                override = ""
             if override in {"hermes", "codex"}:
                 plan = RoutingPlan(
                     category=TaskCategory.GUI if override == "hermes" else TaskCategory.CODE,
@@ -101,4 +126,18 @@ class RoutingEngine:
                     reason=f"显式指定 {override}（权限允许范围内服从）",
                     user_override=True,
                 )
+        if plan.executor is ExecutorChoice.CODEX and not text.lstrip().lower().startswith("/codex"):
+            plan = plan.model_copy(
+                update={
+                    "executor": ExecutorChoice.WHITENIGHT,
+                    "reason": "Codex 仅接受显式 /codex 指令，由小白本体处理当前消息",
+                }
+            )
+        if plan.executor is ExecutorChoice.HERMES and not self._rules.allow_hermes:
+            plan = plan.model_copy(
+                update={
+                    "executor": ExecutorChoice.WHITENIGHT,
+                    "reason": "Hermes 暂时禁用，由小白本体处理当前消息",
+                }
+            )
         return plan

@@ -12,6 +12,7 @@ from sqlalchemy import Engine
 from whitenight.config import Settings
 from whitenight.memory import MemoryService, MemoryStore, NullEmbeddingProvider, NullMemoryExtractor
 from whitenight.models.base import ModelChunk, ProviderMessage
+from whitenight.policy.audit import AuditService
 from whitenight.scheduler import LogSender, ProactiveService, ProactiveStore, next_candidate
 from whitenight.scheduler.poisson import active_minutes_per_day
 from whitenight.scheduler.types import ProactiveConfig
@@ -162,4 +163,35 @@ def test_mark_activity_updates_store(engine: Engine, tmp_path) -> None:
 def test_log_sender_writes_jsonl(tmp_path) -> None:
     sender = LogSender(tmp_path / "logs" / "proactive.jsonl")
     assert sender.send("你好", {"attempt": 1})
-    assert "你好" in (tmp_path / "logs" / "proactive.jsonl").read_text(encoding="utf-8")
+    record = (tmp_path / "logs" / "proactive.jsonl").read_text(encoding="utf-8")
+    assert "你好" not in record
+    assert '"message_chars": 2' in record
+    assert '"message_sha256"' in record
+
+
+def test_proactive_audit_omits_message_body(engine: Engine, tmp_path) -> None:
+    store = ProactiveStore(engine)
+    store.update_config(_config())
+    now_utc = datetime.now(UTC).replace(tzinfo=None)
+    store.set_next_candidate(now_utc - timedelta(minutes=1))
+    memory = MemoryService(MemoryStore(engine), NullMemoryExtractor(), NullEmbeddingProvider())
+    sender = FakeSender()
+    settings = Settings(
+        data_dir=tmp_path,
+        database_url="sqlite:///unused.db",
+        qq_owner_ids=[10001],
+    )
+    service = ProactiveService(
+        store,
+        FakeProvider("secret proactive body"),
+        memory,
+        sender,
+        settings,
+        audit=AuditService(engine),
+    )
+    outcome = asyncio.run(service.tick(datetime.now()))
+    assert outcome.action == "sent"
+    records = AuditService(engine).recent(1)
+    assert records[0].action == "proactive.sent"
+    assert "secret proactive body" not in records[0].params_summary
+    assert "secret proactive body" not in records[0].result_summary

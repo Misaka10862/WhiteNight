@@ -1,6 +1,12 @@
 """tools: 本地工具层与唯一执行入口。"""
 
-from whitenight.tools.base import Source, ToolContext, ToolRegistry, ToolResult
+from whitenight.tools.base import (
+    Source,
+    StickerDeliveryProvider,
+    ToolContext,
+    ToolRegistry,
+    ToolResult,
+)
 from whitenight.tools.executor import ExecutionOutcome, ToolExecutor
 from whitenight.tools.files import (
     ArchiveListTool,
@@ -14,6 +20,7 @@ from whitenight.tools.files import (
     FileWriteTool,
 )
 from whitenight.tools.screen import ScreenshotTool
+from whitenight.tools.stickers import StickerSendTool
 from whitenight.tools.web import VolcGlobalSearchProvider, WebFetchTool, WebSearchTool
 
 __all__ = [
@@ -29,6 +36,8 @@ __all__ = [
     "FileWriteTool",
     "ScreenshotTool",
     "Source",
+    "StickerDeliveryProvider",
+    "StickerSendTool",
     "ToolContext",
     "ToolExecutor",
     "ToolRegistry",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,15 @@ class ProactiveConfig(BaseModel):
     skip_grace_minutes: int = Field(default=45, ge=5, le=240)
 
 
+class ProactiveDelivery(BaseModel):
+    configured_sender: Literal["log", "none", "qq"]
+    active_sender: Literal["log", "none", "qq", "unavailable"]
+    target_user_id: int | None = None
+    onebot_reachable: bool | None = None
+    available: bool
+    reason: str = ""
+
+
 class ProactiveStatus(BaseModel):
     config: ProactiveConfig
     paused: bool = False
@@ -23,6 +33,7 @@ class ProactiveStatus(BaseModel):
     last_activity_at: datetime | None = None
     last_sent_at: datetime | None = None
     next_candidate_at: datetime | None = None
+    delivery: ProactiveDelivery | None = None
 
 
 class PauseRequest(BaseModel):

@@ -13,7 +13,6 @@
 | Approval | Risk/Scope/Parameter Summary + Allow Once/Allow This Session/Deny |
 | Permissions | Tool Risk Rules Table + Session Authorization Revocation |
 | Model | Database/Model/Hermes/Codex Health Status |
-| Constraints | SOUL.md / AGENTS.md View and Edit |
 | Active/log/backup | Honest occupancy, capabilities are accessed in stage 7/10, no false switches |
 
 ## 2. Supporting backend API (new in phase 6)
@@ -22,7 +21,6 @@
 - `GET /api/v1/approvals/pending`、`POST .../{code}/approve|reject`
 - `GET /api/v1/policy/rules`、`GET/DELETE /api/v1/policy/grants[/{id}]`
 - `GET /api/v1/system/health` (DB + model + Codex/Hermes health)
-- `GET/PUT /api/v1/rules/{SOUL|AGENTS}`
 
 ## 3. Usability and Accessibility
 
@@ -35,10 +33,10 @@
 
 - Front-end: eslint ✓, tsc ✓, vite build ✓ (85 modules).
 - Vite agent full link: create/rename/export/delete sessions, fact addition, deletion and retrieval,
-  Task/Approval/Permission/Model/Rule Reading, all passed.
+  Task/Approval/Permission/Model pages, all passed.
 - Real Ollama streaming chat via Vite WebSocket proxy: `Reply only two words: In' → "In".
 - Backend 102 tests: including session deletion audit, approval non-replayable, session authorization revocation,
-  Rule files are read and written safely and the system is healthy.
+  The system is healthy.
 
 ## 5. Boundary
 

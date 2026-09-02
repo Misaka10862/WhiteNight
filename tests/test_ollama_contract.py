@@ -92,3 +92,28 @@ def test_ollama_tool_call_contract() -> None:
     chunks = asyncio.run(run())
     assert chunks[-1].tool_calls[0].arguments == {"names": ["x"]}
     assert captured["tools"]
+
+
+def test_ollama_list_models_contract() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"name": "qwen3:8b"},
+                    {"name": "llama3.2:latest"},
+                    {"name": "qwen3:8b"},
+                    {"name": ""},
+                ]
+            },
+        )
+
+    provider = OllamaProvider(
+        "http://contract.test", "qwen3:8b", transport=httpx.MockTransport(handler)
+    )
+
+    assert asyncio.run(provider.list_models()) == ["qwen3:8b", "llama3.2:latest"]
+    assert captured["path"] == "/api/tags"

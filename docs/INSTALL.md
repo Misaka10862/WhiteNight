@@ -26,6 +26,16 @@ uv run whitenight # http://127.0.0.1:8765, automatic migration
 cd apps/web && npm install && npm run dev   # http://127.0.0.1:5173
 ```
 
+For a persistent local development service, install the WebUI launchd job:
+
+```bash
+./scripts/install_webui_launchd.sh --install
+```
+
+The WebUI is a separate `launchd` user service so the Vite development server is
+restarted when it exits. It listens on `http://127.0.0.1:5173` and proxies `/api`
+and `/ws` to the backend on port 8765.
+
 Open WebUI → Model page to confirm Ollama health; chat page sends "Hello" verification link.
 
 ## 4. System permissions (granted on demand)
@@ -33,9 +43,9 @@ Open WebUI → Model page to confirm Ollama health; chat page sends "Hello" veri
 | Capabilities | System Settings Location | Description |
 |---|---|---|
 | Screenshots | Privacy & Security → Screen Recording | Grant Terminal/whitenight |
-| GUI Operations (Hermes) | Accessibility + Screen Recording | `hermes computer-use permissions grant` |
+| GUI Operations (optional Hermes) | Accessibility + Screen Recording | Required only when `hermes_enabled: true`; then run `hermes computer-use permissions grant` |
 | Trash deletion | Automation (Finder) | macOS will prompt when executing for the first time |
-| Background auto-start | Login items | `./scripts/install_launchd.sh --install` |
+| Background auto-start | Login items | `./scripts/install_launchd.sh --install` and `./scripts/install_webui_launchd.sh --install` |
 
 ## 5. QQ configuration
 
@@ -49,7 +59,7 @@ qq_owner_ids: [your QQ number]
 qq_onebot_api_url: http://127.0.0.1:3000
 ```
 
-4. Restart WhiteNight and confirm the QQ/OneBot status on the model page.
+4. In Dashboard → Model, choose the Provider and save it. For QQ proactive delivery, set the sender to QQ in the local configuration, then use the Dashboard restart button (or restart the launchd service) and confirm the QQ/OneBot status.
 
 ## 6. Backup recovery key
 

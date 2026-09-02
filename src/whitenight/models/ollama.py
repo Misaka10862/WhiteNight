@@ -49,6 +49,11 @@ class OllamaProvider:
             transport=self._transport,
         )
 
+    @property
+    def supports_vision(self) -> bool:
+        """Qwen-VL (and other ``*-vl`` Ollama models) accept images."""
+        return "vl" in self.model.lower() or "vision" in self.model.lower()
+
     def _keep_alive_value(self) -> str | int:
         """Ollama 的 keep_alive 接受时长字符串（如 "5m"）或数字秒；-1 必须是数字。"""
         try:
@@ -161,3 +166,29 @@ class OllamaProvider:
             "model_available": self.model in models,
             "models": models,
         }
+
+    async def list_models(self) -> list[str]:
+        """Return model names advertised by Ollama's tags endpoint."""
+        try:
+            async with self._client() as client:
+                response = await client.get("/api/tags")
+        except httpx.HTTPError as exc:
+            raise ModelProviderError(f"Ollama 模型列表请求失败：{exc}") from exc
+        if response.status_code != 200:
+            body = (await response.aread()).decode("utf-8", errors="replace")
+            raise ModelProviderError(f"Ollama /api/tags 返回 {response.status_code}: {body[:500]}")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ModelProviderError("Ollama /api/tags 返回了无效 JSON") from exc
+        raw_models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(raw_models, list):
+            raise ModelProviderError("Ollama /api/tags 响应缺少 models 列表")
+        names: list[str] = []
+        for item in raw_models:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if isinstance(name, str) and name.strip() and name not in names:
+                names.append(name)
+        return names

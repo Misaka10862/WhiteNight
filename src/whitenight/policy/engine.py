@@ -53,12 +53,14 @@ class PolicyEngine:
         "file.move": RiskLevel.MEDIUM,
         "file.delete": RiskLevel.DELETE,
         "channel.file.send": RiskLevel.MEDIUM,
+        "channel.sticker.send": RiskLevel.MEDIUM,
         "file.batch_delete": RiskLevel.BATCH_DELETE,
     }
     DEFAULT_MODE_OVERRIDES: ClassVar[dict[str, ApprovalMode]] = {
         # The trusted channel and recipient are supplied by the server, not the model. The
         # send tool also fingerprints and revalidates the file immediately before upload.
         "channel.file.send": ApprovalMode.AUTO,
+        "channel.sticker.send": ApprovalMode.AUTO,
     }
 
     def __init__(self, rules: dict[str, RiskLevel] | None = None) -> None:

@@ -66,3 +66,105 @@ def test_model_config_put_persists_and_applies(
 
     current = client.get("/api/v1/model/config").json()
     assert current["ollama_keep_alive"] == "1h"
+
+
+def test_model_provider_requires_cloud_key(client: TestClient) -> None:
+    response = client.put(
+        "/api/v1/model/provider",
+        json={
+            "provider": "openai",
+            "model_name": "gpt-test",
+            "base_url": "https://api.test/v1",
+        },
+    )
+    assert response.status_code == 400
+    assert "API Key" in response.json()["detail"]
+
+
+def test_model_provider_rejects_invalid_base_url(client: TestClient) -> None:
+    response = client.put(
+        "/api/v1/model/provider",
+        json={"provider": "ollama", "model_name": "qwen3:8b", "base_url": "not-a-url"},
+    )
+    assert response.status_code == 400
+
+
+def test_model_provider_writes_keychain_and_switches_runtime(
+    client: TestClient, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config" / "whitenight.yaml"
+    monkeypatch.setenv("WHITENIGHT_CONFIG", str(config_path))
+    response = client.put(
+        "/api/v1/model/provider",
+        json={
+            "provider": "openai",
+            "model_name": "gpt-test",
+            "base_url": "https://api.test/v1",
+            "api_key": "secret-not-returned",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "provider": "openai",
+        "model_name": "gpt-test",
+        "base_url": "https://api.test/v1",
+        "api_key_configured": True,
+        "persisted": True,
+    }
+    assert "secret-not-returned" not in response.text
+    assert settings.model_provider == "openai"
+    assert client.get("/api/v1/model/config").json()["api_key_configured"] is True
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert persisted["model_provider"] == "openai"
+    assert "api_key" not in persisted
+
+
+def test_service_restart_requires_launchd(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    response = client.post("/api/v1/service/restart")
+    assert response.status_code == 409
+
+
+def test_model_list_rejects_cloud_without_key(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/model/models",
+        json={"provider": "openai", "base_url": "https://api.test/v1"},
+    )
+    assert response.status_code == 400
+    assert "API Key" in response.json()["detail"]
+
+
+def test_model_list_rejects_invalid_base_url(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/model/models",
+        json={"provider": "ollama", "base_url": "not-a-url"},
+    )
+    assert response.status_code == 400
+
+
+def test_model_list_uses_temporary_cloud_key_without_persisting(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_list_models(self) -> list[str]:
+        assert self.api_key == "temporary-secret"
+        return ["gpt-test", "another-model"]
+
+    monkeypatch.setattr("whitenight.models.openai.OpenAIProvider.list_models", fake_list_models)
+    response = client.post(
+        "/api/v1/model/models",
+        json={
+            "provider": "openai",
+            "base_url": "https://api.test/v1",
+            "api_key": "temporary-secret",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider": "openai",
+        "models": ["gpt-test", "another-model"],
+    }
+    assert "temporary-secret" not in response.text
+    assert client.app.state.credentials.get("com.whitenight.credentials", "openai_api_key") is None

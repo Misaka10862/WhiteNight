@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.whitenight.web</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{NPM_PATH}}</string>
+        <string>run</string>
+        <string>dev</string>
+        <string>--</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>5173</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{WEB_DIR}}</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/webui.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/webui.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{NODE_DIR}}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

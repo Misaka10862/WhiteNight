@@ -32,6 +32,14 @@ class ToolResult(BaseModel):
         return cls(ok=False, summary=summary, error=error)
 
 
+class FileDeliveryProvider(Protocol):
+    def upload_file(self, target: str, path: str, name: str) -> None: ...
+
+
+class StickerDeliveryProvider(Protocol):
+    def send_sticker(self, target: str, sticker_id: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """工具执行上下文：只包含执行所需的最小授权信息。"""
@@ -41,10 +49,7 @@ class ToolContext:
     channel: str | None = None
     channel_target: str | None = None
     file_delivery: FileDeliveryProvider | None = None
-
-
-class FileDeliveryProvider(Protocol):
-    def upload_file(self, target: str, path: str, name: str) -> None: ...
+    sticker_delivery: StickerDeliveryProvider | None = None
 
 
 class ToolParameters(BaseModel):

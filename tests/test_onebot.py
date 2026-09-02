@@ -198,6 +198,145 @@ def test_image_segment_is_understood(engine: Engine, settings: Settings) -> None
     assert message.image_data_url == image
 
 
+def test_local_image_path_is_resolved_and_sent_to_model(
+    engine: Engine, settings: Settings, tmp_path
+) -> None:
+    source = tmp_path / "qq-cache" / "photo.jpg"
+    source.parent.mkdir()
+    source.write_bytes(b"\xff\xd8\xff\xe0minimal-jpeg")
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = _private(51, "[CQ:image,file=photo.jpg]")
+    event["raw_message"] = f"[CQ:image,file={source}]"
+    event["message"] = [{"type": "image", "data": {"file": str(source)}}]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert message.kind == "image"
+    assert message.image_data_url is not None
+    assert message.image_data_url.startswith("data:image/jpeg;base64,")
+
+
+def test_image_file_id_is_resolved_through_onebot(engine: Engine, settings: Settings) -> None:
+    class ImageQQ(FakeQQ):
+        def get_file(self, file_id: str) -> dict[str, object]:
+            assert file_id == "image-1"
+            return {
+                "file_name": "photo.png",
+                "base64": base64.b64encode(b"\x89PNG\r\n\x1a\nminimal").decode("ascii"),
+            }
+
+    sender = ImageQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = _private(52, "[CQ:image,file=photo.png,file_id=image-1]")
+    event["message"] = [{"type": "image", "data": {"file": "photo.png", "file_id": "image-1"}}]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert message.kind == "image"
+    assert message.image_data_url is not None
+
+
+def test_opaque_image_file_token_is_resolved_through_get_image(
+    engine: Engine, settings: Settings
+) -> None:
+    class ImageQQ(FakeQQ):
+        def get_image(self, file_id: str) -> dict[str, object]:
+            assert file_id == "opaque-image-token"
+            return {"base64": base64.b64encode(b"\x89PNG\r\n\x1a\nminimal").decode("ascii")}
+
+    sender = ImageQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = _private(521, "[CQ:image,file=opaque-image-token]")
+    event["message"] = [{"type": "image", "data": {"file": "opaque-image-token"}}]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert message.kind == "image"
+    assert message.image_data_url is not None
+
+
+def test_cq_string_image_message_is_parsed(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode("ascii")
+    event = _private(53, f"看图[CQ:image,file=base64://{encoded}]")
+    event["message"] = event["raw_message"]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert message.kind == "image"
+
+
+def test_custom_qq_sticker_segment_is_read_as_image(
+    engine: Engine, settings: Settings, tmp_path
+) -> None:
+    source = tmp_path / "sticker.webp"
+    # Minimal RIFF/WEBP signature is enough for the adapter MIME sniffing.
+    source.write_bytes(b"RIFFxxxxWEBPsticker")
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = _private(531, "")
+    event["message"] = [
+        {
+            "type": "mface",
+            "data": {
+                "emoji_id": 12345,
+                "emoji_package_id": 9,
+                "url": str(source),
+                "summary": "[猫猫]",
+            },
+        }
+    ]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert message.kind == "image"
+    assert message.image_data_url is not None
+    assert message.image_data_url.startswith("data:image/webp;base64,")
+
+
+def test_numeric_onebot_segment_fields_do_not_reject_event(
+    engine: Engine, settings: Settings
+) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = _private(532, "")
+    event["message"] = [{"type": "face", "data": {"id": 178, "raw": 1}}]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert "QQ表情" in message.content
+
+
+def test_reply_segment_fetches_quoted_text(engine: Engine, settings: Settings) -> None:
+    class ReplyQQ(FakeQQ):
+        def get_message(self, message_id: int | str) -> dict[str, object]:
+            assert str(message_id) == "900"
+            return {"raw_message": "原消息内容"}
+
+    sender = ReplyQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = _private(54, "[CQ:reply,id=900]请继续")
+    event["message"] = [
+        {"type": "reply", "data": {"id": "900"}},
+        {"type": "text", "data": {"text": "请继续"}},
+    ]
+
+    assert asyncio_run(adapter.handle_event(event))["status"] == "replied"
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
+    assert "QQ引用消息 id=900" in message.content
+    assert "原消息内容" in message.content
+    assert message.content.endswith("请继续")
+
+
 def test_file_segment_saves_local_copy(engine: Engine, settings: Settings, tmp_path) -> None:
     source = tmp_path / "data.bin"
     source.write_bytes(b"hello qq")
@@ -361,6 +500,16 @@ def test_onebot_sender_retries(monkeypatch) -> None:
     sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler), max_attempts=2)
     assert sender.send_private_message(10001, "你好") == 1
     assert len(calls) == 2
+
+
+def test_onebot_sender_health_checks_login() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/get_login_info"
+        return httpx.Response(200, json={"status": "ok", "retcode": 0}, request=request)
+
+    sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler))
+    assert sender.health() is True
 
 
 def test_upload_private_file_uses_base64_json(tmp_path) -> None:

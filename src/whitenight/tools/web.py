@@ -71,7 +71,7 @@ class VolcGlobalSearchProvider:
     def search(self, query: str, limit: int = 8) -> list[SearchResult]:
         key = self._key_provider()
         if not key:
-            return DuckDuckGoSearchProvider(self.timeout.connect).search(query, limit)
+            return DuckDuckGoSearchProvider(self.timeout.connect or 10.0).search(query, limit)
         payload = {
             "Query": query,
             "DocCount": limit,
@@ -118,7 +118,7 @@ class VolcGlobalSearchProvider:
         return output
 
     def fetch(self, url: str, max_chars: int = 12_000) -> FetchedPage:
-        return DuckDuckGoSearchProvider(self.timeout.connect).fetch(url, max_chars)
+        return DuckDuckGoSearchProvider(self.timeout.connect or 10.0).fetch(url, max_chars)
 
 
 def is_private_or_loopback_url(url: str) -> bool:

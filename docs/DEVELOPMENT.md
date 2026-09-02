@@ -87,6 +87,13 @@ npm run dev # http://127.0.0.1:5173, /api and /ws proxy to 8765
 npm run check        # eslint + tsc + vite build
 ```
 
+For a persistent local development service, install the user-level launchd job:
+
+```bash
+./scripts/install_webui_launchd.sh --install
+./scripts/install_webui_launchd.sh --status
+```
+
 ## 3. One-click check
 
 ```bash

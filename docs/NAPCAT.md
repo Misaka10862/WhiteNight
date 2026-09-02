@@ -58,4 +58,52 @@ Sending proactive messages to QQ: Change `proactive_sender` to `qq` (the sending
 
 - Only the QQ number in owner_ids can trigger tools and approval; group chat is ignored.
 - Approval command: `Agree <number>` / `Reject <number>`.
+- Images are accepted from the structured OneBot URL/base64/cache-path/file-id
+  forms and from legacy CQ-code strings.  NapCat custom stickers (`mface`,
+  `market_face`, `sticker`, or `emoji`) use the same media path; built-in
+  `face` segments are preserved as explicit context when no bitmap is exposed.
+  Reply messages are resolved through
+  OneBot `get_msg` when available; the quoted body is bounded and marked as
+  untrusted context before it reaches the model.
 - NapCat version upgrade requires re-running the contract test (`tests/test_onebot.py`).
+
+## Emotion stickers
+
+Import a transparent 3x3 sheet (existing files are never overwritten):
+
+```bash
+uv run scripts/import_stickers.py /absolute/path/sticker-sheet.png
+```
+
+The generated PNGs and `catalog.json` live in `data/stickers/`. The PNGs are only source/reference
+assets; to send a real QQ animated face, fill each record's `segment_type`, `emoji_id`, and either
+`emoji_package_id` or NapCat `key` with identifiers obtained after registering/importing the asset
+in QQ/NapCat. Records without native identifiers are disabled for sending rather than downgraded
+to an image. Edit `label`, `use_when`, `avoid_when`, and `enabled` directly, then restart WhiteNight.
+The model sees only text hints and does not invoke image understanding to choose a sticker. At most
+one native sticker is sent per turn, after the text.
+
+Binding workflow:
+
+1. Add each PNG to the QQ custom-emoji collection manually.
+2. Send each registered emoji once through the configured OneBot event route.
+3. Copy the received `mface` or `market_face` fields (`emoji_id`, `emoji_package_id`, and/or `key`)
+   into the matching catalog record.
+4. Restart WhiteNight and confirm the Model page reports a non-zero native-sticker count.
+
+Example native binding:
+
+```json
+{
+  "id": "sticker-01",
+  "file": "sticker-01.png",
+  "label": "happy playful",
+  "use_when": ["happy", "playful"],
+  "avoid_when": ["serious"],
+  "enabled": true,
+  "segment_type": "mface",
+  "emoji_id": "<QQ/NapCat emoji id>",
+  "emoji_package_id": "<package id>",
+  "key": null
+}
+```

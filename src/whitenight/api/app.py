@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -20,7 +23,6 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from whitenight import __version__
-from whitenight.agent.context import load_soul
 from whitenight.agent.service import ChatService, create_chat_service
 from whitenight.channels.onebot import ChannelSessionStore, OneBotAdapter, OneBotSender
 from whitenight.channels.types import (
@@ -32,7 +34,8 @@ from whitenight.channels.types import (
     SessionSummary,
 )
 from whitenight.config import DEFAULT_CONFIG_PATH, Settings, load_settings
-from whitenight.credentials.keychain import get_keychain
+from whitenight.credentials.keychain import Keychain, KeychainError, get_keychain
+from whitenight.delegates.base import DelegateProvider
 from whitenight.delegates.codex import CodexAdapter
 from whitenight.delegates.hermes_ws import HermesProcessManager, ManagedHermesGatewayAdapter
 from whitenight.delegates.manager import DelegateManager, TaskRecord, TaskStore
@@ -55,7 +58,7 @@ from whitenight.memory.types import (
     FactUpsert,
     MemoryHit,
 )
-from whitenight.models.base import ModelProvider
+from whitenight.models.base import ModelProvider, ModelProviderError
 from whitenight.models.ollama import OllamaProvider
 from whitenight.models.openai import OpenAIProvider
 from whitenight.personality.compiler import PromptCompiler
@@ -68,7 +71,13 @@ from whitenight.policy.engine import PolicyEngine
 from whitenight.routing.engine import OllamaRoutingRouter, RoutingEngine
 from whitenight.routing.rules import RuleRouter
 from whitenight.scheduler import LogSender, NullSender, ProactiveService, ProactiveStore
-from whitenight.scheduler.types import PauseRequest, ProactiveConfig, ProactiveStatus
+from whitenight.scheduler.types import (
+    PauseRequest,
+    ProactiveConfig,
+    ProactiveDelivery,
+    ProactiveStatus,
+)
+from whitenight.stickers import StickerCatalog, StickerCatalogError
 from whitenight.storage.attachments import image_path_to_data_url, save_image_data_url
 from whitenight.storage.engine import backend_of, build_engine, ping, resolve_database_key
 from whitenight.storage.migrate import upgrade_to_head
@@ -90,7 +99,9 @@ from whitenight.tools import (
     WebFetchTool,
     WebSearchTool,
 )
+from whitenight.tools.base import Tool
 from whitenight.tools.pending import PendingToolStore
+from whitenight.tools.stickers import StickerSendTool
 
 
 class ExtractRequest(BaseModel):
@@ -109,12 +120,21 @@ class ApprovalAction(BaseModel):
     session_id: str | None = None
 
 
-class RuleUpdate(BaseModel):
-    content: str
-
-
 class ModelKeepAliveUpdate(BaseModel):
     keep_alive: str
+
+
+class ModelProviderUpdate(BaseModel):
+    provider: Literal["ollama", "openai"]
+    model_name: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(min_length=1, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=4096)
+
+
+class ModelListRequest(BaseModel):
+    provider: Literal["ollama", "openai"]
+    base_url: str = Field(min_length=1, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=4096)
 
 
 class CharacterImport(BaseModel):
@@ -146,6 +166,55 @@ class TokenizerPathUpdate(BaseModel):
 
 
 _MODEL_KEEP_ALIVE_OPTIONS = ("-1", "5m", "30m", "1h", "6h", "12h")
+_MODEL_PROVIDERS = ("ollama", "openai")
+_LAUNCHD_SERVICE_LABEL = "com.whitenight.service"
+logger = logging.getLogger(__name__)
+
+
+def _validate_model_base_url(base_url: str) -> str:
+    value = base_url.strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Base URL 必须是完整的 HTTP(S) 地址")
+    return value
+
+
+def _build_model_provider(settings: Settings, credentials: Keychain) -> ModelProvider:
+    """Construct the configured provider; credentials are resolved lazily."""
+    keychain = credentials
+    if settings.model_provider == "openai":
+        return OpenAIProvider(
+            base_url=settings.openai_base_url,
+            model=settings.model_name,
+            api_key=None,
+            timeout_s=settings.openai_timeout_s,
+            max_output_tokens=settings.model_max_output_tokens,
+            key_provider=lambda: keychain.get(
+                settings.keychain_service, settings.openai_api_key_account
+            ),
+        )
+    return OllamaProvider(
+        base_url=settings.ollama_base_url,
+        model=settings.model_name,
+        max_output_tokens=settings.model_max_output_tokens,
+        keep_alive=settings.ollama_keep_alive,
+    )
+
+
+def _persist_config_values(updates: dict[str, object]) -> None:
+    """Persist non-secret runtime settings and keep the existing backup behavior."""
+    path = Path(os.environ.get("WHITENIGHT_CONFIG", str(DEFAULT_CONFIG_PATH)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, object] = {}
+    if path.exists():
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            raise HTTPException(status_code=500, detail="配置文件格式损坏")
+        data = loaded
+        backup = path.with_suffix(f".bak-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
+        shutil.copy2(path, backup)
+    data.update(updates)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=True), encoding="utf-8")
 
 
 def _embedded_lorebook(card: CharacterCard) -> LorebookData | None:
@@ -242,30 +311,16 @@ def create_app(
         )
         store = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
         credential_store = get_keychain(settings.keychain_backend)
-        if model_provider is not None:
-            provider = model_provider
-        elif settings.model_provider == "openai":
-            provider = OpenAIProvider(
-                base_url=settings.openai_base_url,
-                model=settings.model_name,
-                api_key=None,
-                timeout_s=settings.openai_timeout_s,
-                max_output_tokens=settings.model_max_output_tokens,
-                key_provider=lambda: credential_store.get(
-                    settings.keychain_service, settings.openai_api_key_account
-                ),
-            )
-        else:
-            provider = OllamaProvider(
-                base_url=settings.ollama_base_url,
-                model=settings.model_name,
-                max_output_tokens=settings.model_max_output_tokens,
-                keep_alive=settings.ollama_keep_alive,
-            )
+        provider = model_provider or _build_model_provider(settings, credential_store)
         audit = AuditService(engine)
         approvals = ApprovalService(engine)
         policy = PolicyEngine()
         onebot_sender = OneBotSender(settings.qq_onebot_api_url, settings.qq_reply_max_chars)
+        sticker_catalog: StickerCatalog | None = None
+        try:
+            sticker_catalog = StickerCatalog(settings.data_dir / "stickers")
+        except StickerCatalogError:
+            logger.exception("表情目录加载失败，将暂时停用情绪表情包")
         volc_search = VolcGlobalSearchProvider(
             lambda: credential_store.get(
                 settings.keychain_service, settings.volc_search_api_key_account
@@ -273,22 +328,23 @@ def create_app(
             endpoint=settings.volc_search_endpoint,
             timeout_s=settings.volc_search_timeout_s,
         )
-        tool_registry = ToolRegistry(
-            [
-                FileFindTool(),
-                FileReadTool(),
-                FileCreateTool(),
-                FileWriteTool(),
-                FileMoveTool(),
-                FileDeleteTool(),
-                DocumentParseTool(),
-                ArchiveListTool(),
-                ScreenshotTool(),
-                WebSearchTool(volc_search),
-                WebFetchTool(volc_search),
-                ChannelFileSendTool(settings.qq_file_send_max_bytes),
-            ]
-        )
+        registered_tools: list[Tool] = [
+            FileFindTool(),
+            FileReadTool(),
+            FileCreateTool(),
+            FileWriteTool(),
+            FileMoveTool(),
+            FileDeleteTool(),
+            DocumentParseTool(),
+            ArchiveListTool(),
+            ScreenshotTool(),
+            WebSearchTool(volc_search),
+            WebFetchTool(volc_search),
+            ChannelFileSendTool(settings.qq_file_send_max_bytes),
+        ]
+        if sticker_catalog is not None and sticker_catalog.records(native_only=True):
+            registered_tools.append(StickerSendTool(sticker_catalog, settings.qq_owner_ids))
+        tool_registry = ToolRegistry(registered_tools)
         tool_executor = ToolExecutor(tool_registry, policy, approvals, audit)
         pending_tools = PendingToolStore(engine)
         extractor = memory_extractor or _build_memory_extractor(settings, provider)
@@ -308,12 +364,12 @@ def create_app(
         )
         proactive_store = ProactiveStore(engine)
         proactive_sender: LogSender | NullSender | OneBotSender
-        if settings.proactive_sender == "qq" and settings.qq_owner_ids:
+        if settings.proactive_sender == "qq":
             proactive_sender = onebot_sender
         else:
             proactive_sender = (
                 LogSender(settings.data_dir / "logs" / "proactive.jsonl")
-                if settings.proactive_sender in {"log", "qq"}
+                if settings.proactive_sender == "log"
                 else NullSender()
             )
         proactive_service = ProactiveService(
@@ -323,38 +379,43 @@ def create_app(
             proactive_sender,
             settings,
             personality_store,
+            audit,
         )
         proactive_stop = asyncio.Event()
         proactive_task = asyncio.create_task(proactive_service.run_forever(proactive_stop))
         task_store = TaskStore(engine)
-        hermes_process = HermesProcessManager(
-            settings.hermes_gateway_url,
-            settings.hermes_command,
-            lambda: credential_store.get(
-                settings.keychain_service, settings.deepseek_api_key_account
-            ),
-            settings.hermes_startup_timeout_s,
-            settings.hermes_managed,
-            settings.hermes_inference_base_url,
-        )
-        hermes_adapter = ManagedHermesGatewayAdapter(
-            hermes_process,
-            approvals,
-            base_url=settings.hermes_gateway_url,
-            provider=settings.hermes_provider,
-            model=settings.hermes_model,
-            timeout_s=settings.codex_timeout_s,
-        )
+        delegate_providers: dict[str, DelegateProvider] = {
+            "codex": CodexAdapter(settings.codex_command, settings.codex_timeout_s),
+        }
+        hermes_adapter: ManagedHermesGatewayAdapter | None = None
+        if settings.hermes_enabled:
+            hermes_process = HermesProcessManager(
+                settings.hermes_gateway_url,
+                settings.hermes_command,
+                lambda: credential_store.get(
+                    settings.keychain_service, settings.deepseek_api_key_account
+                ),
+                settings.hermes_startup_timeout_s,
+                settings.hermes_managed,
+                settings.hermes_inference_base_url,
+            )
+            hermes_adapter = ManagedHermesGatewayAdapter(
+                hermes_process,
+                approvals,
+                base_url=settings.hermes_gateway_url,
+                provider=settings.hermes_provider,
+                model=settings.hermes_model,
+                timeout_s=settings.codex_timeout_s,
+            )
+            delegate_providers["hermes"] = hermes_adapter
         delegate_manager = DelegateManager(
             task_store,
-            {
-                "codex": CodexAdapter(settings.codex_command, settings.codex_timeout_s),
-                "hermes": hermes_adapter,
-            },
+            delegate_providers,
         )
+        llm_router = OllamaRoutingRouter(provider, allow_hermes=settings.hermes_enabled)
         router = RoutingEngine(
-            rule_router=RuleRouter(),
-            llm_router=OllamaRoutingRouter(provider),
+            rule_router=RuleRouter(allow_hermes=settings.hermes_enabled),
+            llm_router=llm_router,
         )
         chat_service = create_chat_service(
             store,
@@ -372,6 +433,7 @@ def create_app(
             onebot_sender,
             prompt_compiler,
             personality_store,
+            sticker_catalog,
         )
         channel_sessions = ChannelSessionStore(engine, store)
         onebot_adapter = OneBotAdapter(
@@ -382,8 +444,16 @@ def create_app(
             approvals,
             onebot_sender,
             personality_store,
+            sticker_catalog,
+            audit,
         )
         _app.state.engine = engine
+        _app.state.settings = settings
+        _app.state.credentials = credential_store
+        _app.state.extractor = extractor
+        _app.state.llm_router = llm_router
+        _app.state.onebot_sender = onebot_sender
+        _app.state.sticker_catalog = sticker_catalog
         _app.state.store = store
         _app.state.memory_service = memory_service
         _app.state.personality_store = personality_store
@@ -402,7 +472,8 @@ def create_app(
         _app.state.chat_service = chat_service
         yield
         proactive_stop.set()
-        await hermes_adapter.close()
+        if hermes_adapter is not None:
+            await hermes_adapter.close()
         try:
             await asyncio.wait_for(proactive_task, timeout=10)
         except TimeoutError:
@@ -606,7 +677,42 @@ def create_app(
     @app.get("/api/v1/proactive/status", response_model=ProactiveStatus)
     async def proactive_status() -> ProactiveStatus:
         service: ProactiveService = app.state.proactive_service
-        return service.status()
+        status = service.status()
+        target = settings.qq_owner_ids[0] if settings.qq_owner_ids else None
+        if settings.proactive_sender == "qq":
+            onebot_reachable = (
+                await asyncio.to_thread(app.state.onebot_sender.health)
+                if settings.qq_enabled and target
+                else False
+            )
+            available = bool(settings.qq_enabled and target and onebot_reachable)
+            delivery = ProactiveDelivery(
+                configured_sender="qq",
+                active_sender="qq" if available else "unavailable",
+                target_user_id=target,
+                onebot_reachable=onebot_reachable,
+                available=available,
+                reason="" if available else "需要启用 QQ、配置 owner_ids 并确保 OneBot 已登录",
+            )
+        elif settings.proactive_sender == "log":
+            delivery = ProactiveDelivery(
+                configured_sender="log",
+                active_sender="log",
+                target_user_id=None,
+                onebot_reachable=None,
+                available=True,
+                reason="仅写入本地最小审计日志",
+            )
+        else:
+            delivery = ProactiveDelivery(
+                configured_sender="none",
+                active_sender="none",
+                target_user_id=None,
+                onebot_reachable=None,
+                available=True,
+                reason="主动消息发送已关闭",
+            )
+        return status.model_copy(update={"delivery": delivery})
 
     @app.put("/api/v1/proactive/config", response_model=ProactiveStatus)
     async def proactive_config(payload: ProactiveConfig) -> ProactiveStatus:
@@ -627,7 +733,28 @@ def create_app(
     async def model_config() -> dict[str, object]:
         provider = app.state.chat_service.provider
         keep_alive = getattr(provider, "keep_alive", settings.ollama_keep_alive)
+        provider_name = settings.model_provider
+        api_key_configured = False
+        if provider_name == "openai":
+            try:
+                api_key_configured = bool(
+                    app.state.credentials.get(
+                        settings.keychain_service, settings.openai_api_key_account
+                    )
+                )
+            except KeychainError:
+                api_key_configured = False
         return {
+            "provider": provider_name,
+            "providers": list(_MODEL_PROVIDERS),
+            "model_name": getattr(provider, "model", settings.model_name),
+            "base_url": getattr(
+                provider,
+                "base_url",
+                settings.openai_base_url if provider_name == "openai" else settings.ollama_base_url,
+            ),
+            "api_key_account": settings.openai_api_key_account,
+            "api_key_configured": api_key_configured,
             "ollama_keep_alive": keep_alive,
             "options": list(_MODEL_KEEP_ALIVE_OPTIONS),
             "tokenizer_path": str(settings.model_tokenizer_path or ""),
@@ -645,19 +772,140 @@ def create_app(
             provider.keep_alive = payload.keep_alive
         settings.ollama_keep_alive = payload.keep_alive
 
-        path = Path(os.environ.get("WHITENIGHT_CONFIG", str(DEFAULT_CONFIG_PATH)))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data: dict[str, object] = {}
-        if path.exists():
-            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            if not isinstance(loaded, dict):
-                raise HTTPException(status_code=500, detail="配置文件格式损坏")
-            data = loaded
-            backup = path.with_suffix(f".bak-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
-            shutil.copy2(path, backup)
-        data["ollama_keep_alive"] = payload.keep_alive
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=True), encoding="utf-8")
+        _persist_config_values({"ollama_keep_alive": payload.keep_alive})
         return {"ollama_keep_alive": payload.keep_alive, "persisted": True}
+
+    @app.put("/api/v1/model/provider")
+    async def update_model_provider(payload: ModelProviderUpdate) -> dict[str, object]:
+        base_url = _validate_model_base_url(payload.base_url)
+        model_name = payload.model_name.strip()
+        if not model_name:
+            raise HTTPException(status_code=400, detail="模型名称不能为空")
+
+        credentials = app.state.credentials
+        supplied_key = payload.api_key.strip() if payload.api_key is not None else ""
+        if payload.provider == "openai":
+            try:
+                configured_key = credentials.get(
+                    settings.keychain_service, settings.openai_api_key_account
+                )
+            except KeychainError as exc:
+                raise HTTPException(status_code=500, detail="无法读取 macOS Keychain") from exc
+            if not supplied_key and not configured_key:
+                raise HTTPException(status_code=400, detail="云端 Provider 未配置 API Key")
+            if supplied_key:
+                try:
+                    credentials.set(
+                        settings.keychain_service, settings.openai_api_key_account, supplied_key
+                    )
+                except KeychainError as exc:
+                    raise HTTPException(status_code=500, detail="无法写入 macOS Keychain") from exc
+
+        next_settings = settings.model_copy(
+            update={
+                "model_provider": payload.provider,
+                "model_name": model_name,
+                "ollama_base_url": base_url
+                if payload.provider == "ollama"
+                else settings.ollama_base_url,
+                "openai_base_url": base_url
+                if payload.provider == "openai"
+                else settings.openai_base_url,
+            }
+        )
+        next_provider = _build_model_provider(next_settings, credentials)
+        _persist_config_values(
+            {
+                "model_provider": payload.provider,
+                "model_name": model_name,
+                "ollama_base_url": base_url
+                if payload.provider == "ollama"
+                else settings.ollama_base_url,
+                "openai_base_url": base_url
+                if payload.provider == "openai"
+                else settings.openai_base_url,
+            }
+        )
+
+        settings.model_provider = next_settings.model_provider
+        settings.model_name = next_settings.model_name
+        settings.ollama_base_url = next_settings.ollama_base_url
+        settings.openai_base_url = next_settings.openai_base_url
+        app.state.chat_service.set_provider(next_provider)
+        app.state.llm_router.set_provider(next_provider)
+        app.state.proactive_service.set_provider(next_provider)
+        extractor = app.state.extractor
+        set_extractor_provider = getattr(extractor, "set_provider", None)
+        if callable(set_extractor_provider):
+            set_extractor_provider(next_provider)
+        return {
+            "provider": settings.model_provider,
+            "model_name": settings.model_name,
+            "base_url": base_url,
+            "api_key_configured": bool(
+                payload.provider == "openai"
+                and credentials.get(settings.keychain_service, settings.openai_api_key_account)
+            ),
+            "persisted": True,
+        }
+
+    @app.post("/api/v1/model/models")
+    async def list_model_names(payload: ModelListRequest) -> dict[str, object]:
+        """Query available models without changing the active Provider configuration."""
+        base_url = _validate_model_base_url(payload.base_url)
+        credentials = app.state.credentials
+        supplied_key = payload.api_key.strip() if payload.api_key is not None else ""
+        if payload.provider == "openai":
+            if not supplied_key:
+                try:
+                    supplied_key = (
+                        credentials.get(settings.keychain_service, settings.openai_api_key_account)
+                        or ""
+                    )
+                except KeychainError as exc:
+                    raise HTTPException(status_code=500, detail="无法读取 macOS Keychain") from exc
+            if not supplied_key:
+                raise HTTPException(status_code=400, detail="云端 Provider 未配置 API Key")
+            provider: OllamaProvider | OpenAIProvider = OpenAIProvider(
+                base_url=base_url,
+                model=settings.model_name,
+                api_key=supplied_key,
+                timeout_s=settings.openai_timeout_s,
+                max_output_tokens=settings.model_max_output_tokens,
+            )
+        else:
+            provider = OllamaProvider(
+                base_url=base_url,
+                model=settings.model_name,
+                max_output_tokens=settings.model_max_output_tokens,
+                keep_alive=settings.ollama_keep_alive,
+            )
+        try:
+            models = await provider.list_models()
+        except ModelProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"provider": payload.provider, "models": models}
+
+    @app.post("/api/v1/service/restart", status_code=202)
+    async def restart_service() -> dict[str, object]:
+        if os.environ.get("XPC_SERVICE_NAME") != _LAUNCHD_SERVICE_LABEL:
+            raise HTTPException(status_code=409, detail="WhiteNight 当前不是由 launchd 管理")
+        target = f"gui/{os.getuid()}/{_LAUNCHD_SERVICE_LABEL}"
+
+        async def kickstart() -> None:
+            await asyncio.sleep(0.2)
+            process = await asyncio.create_subprocess_exec(
+                "/bin/launchctl",
+                "kickstart",
+                "-k",
+                target,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await process.wait()
+
+        app.state.restart_task = asyncio.create_task(kickstart())
+        return {"accepted": True, "service": _LAUNCHD_SERVICE_LABEL}
 
     @app.put("/api/v1/model/tokenizer")
     async def update_tokenizer(payload: TokenizerPathUpdate) -> dict[str, object]:
@@ -921,6 +1169,12 @@ def create_app(
                 delegate_status[name] = await delegate.health()
             except Exception as exc:
                 delegate_status[name] = {"error": str(exc)}
+        if not settings.hermes_enabled:
+            delegate_status["hermes"] = {
+                "enabled": False,
+                "status": "disabled",
+                "reason": "Hermes delegation is disabled by configuration",
+            }
         return {
             "database": {
                 "backend": backend_of(str(settings.database_url)),
@@ -932,27 +1186,18 @@ def create_app(
                 "enabled": app.state.onebot_adapter.enabled(),
                 "owner_ids": app.state.onebot_adapter.owner_ids(),
                 "api_url": settings.qq_onebot_api_url,
+                "health": await asyncio.to_thread(app.state.onebot_sender.health_detail),
+                "stickers": {
+                    "configured": bool(
+                        getattr(app.state, "sticker_catalog", None)
+                        and app.state.sticker_catalog.records(native_only=True)
+                    ),
+                    "native_ready": len(app.state.sticker_catalog.records(native_only=True))
+                    if getattr(app.state, "sticker_catalog", None)
+                    else 0,
+                },
             },
         }
-
-    @app.get("/api/v1/rules/{name}", response_class=PlainTextResponse)
-    async def get_rule_file(name: str) -> str:
-        if name not in {"SOUL", "AGENTS"}:
-            raise HTTPException(status_code=404, detail="规则文件不存在")
-        path = settings.soul_file if name == "SOUL" else Path("AGENTS.md")
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-        if name == "SOUL":
-            return load_soul(path)
-        return "# AGENTS.md（尚未创建，保存后生效）\n"
-
-    @app.put("/api/v1/rules/{name}", response_class=PlainTextResponse)
-    async def update_rule_file(name: str, payload: RuleUpdate) -> str:
-        if name not in {"SOUL", "AGENTS"}:
-            raise HTTPException(status_code=404, detail="规则文件不存在")
-        path = settings.soul_file if name == "SOUL" else Path("AGENTS.md")
-        path.write_text(payload.content, encoding="utf-8")
-        return "saved"
 
     # ---- 长期记忆（阶段 4） --------------------------------------------
 
@@ -1098,6 +1343,16 @@ def create_app(
             "enabled": adapter.enabled(),
             "owner_ids": adapter.owner_ids(),
             "api_url": settings.qq_onebot_api_url,
+            "health": await asyncio.to_thread(app.state.onebot_sender.health_detail),
+            "stickers": {
+                "configured": bool(
+                    getattr(app.state, "sticker_catalog", None)
+                    and app.state.sticker_catalog.records(native_only=True)
+                ),
+                "native_ready": len(app.state.sticker_catalog.records(native_only=True))
+                if getattr(app.state, "sticker_catalog", None)
+                else 0,
+            },
         }
 
     @app.get("/api/v1/logs", response_class=PlainTextResponse)

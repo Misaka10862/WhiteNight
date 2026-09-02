@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key_account: str = "openai_api_key"
     openai_timeout_s: float = 120.0
-    model_supports_vision: bool = False  # qwen3:8b 无视觉；LoRA 后切回 qwen3-vl 并置 true
+    # Explicit override for text-only deployments.  When omitted, the active
+    # Provider determines image capability (e.g. qwen3-vl or OpenAI vision).
+    model_supports_vision: bool | None = None
     model_max_output_tokens: int = 2048  # Ollama num_predict 上限，防止退化成无限生成
     model_context_tokens: int = 32768
     model_tokenizer_path: Path | None = None
@@ -62,6 +64,7 @@ class Settings(BaseSettings):
     memory_extractor: Literal["ollama", "rules", "none"] = "ollama"
     memory_extract_max_tokens: int = 512  # 记忆提取单独限长，避免占住唯一推理槽太久
     embedding_model: str = ""  # 为空则仅词法检索；小模型按需加载
+    hermes_enabled: bool = False
     hermes_gateway_url: str = "http://127.0.0.1:9119"
     hermes_managed: bool = True
     hermes_command: str = "hermes"

@@ -219,6 +219,9 @@ class PromptCompiler:
 
         history_start = len(messages)
         for record in history:
+            image_mime = None
+            if record.image_data_url and record.image_data_url.startswith("data:"):
+                image_mime = record.image_data_url[5:].split(";", 1)[0]
             messages.append(
                 ProviderMessage(
                     role=record.role,
@@ -226,6 +229,7 @@ class PromptCompiler:
                     images=[record.image_data_url.split(",", 1)[-1]]
                     if record.image_data_url
                     else [],
+                    image_mimes=[image_mime] if image_mime else [],
                 )
             )
             sources.append("history")

@@ -16,7 +16,7 @@ from whitenight.routing.models import (
 )
 
 _HERMES_PATTERN = re.compile(r"(?:用|交给|让|请)\s*(?:hermes|赫耳墨斯|电脑操作)", re.I)
-_CODEX_PATTERN = re.compile(r"(?:用|交给|让|请)\s*(?:codex|科德克斯)", re.I)
+_CODEX_COMMAND_PATTERN = re.compile(r"^\s*/codex(?:\s+(?P<prompt>.*))?\s*$", re.I | re.S)
 _WHITENIGHT_PATTERN = re.compile(r"(?:小白|你自己|本地模型)\s*(?:来处理|自己来|处理|回答)")
 
 _CODE_PATTERNS = [
@@ -46,6 +46,13 @@ def _has_any(text: str, patterns: list[re.Pattern[str]]) -> bool:
 class RuleRouter:
     """高精度规则路由；返回 None 表示留给 LLM 路由/默认本地处理。"""
 
+    def __init__(self, allow_hermes: bool = False) -> None:
+        self._allow_hermes = allow_hermes
+
+    @property
+    def allow_hermes(self) -> bool:
+        return self._allow_hermes
+
     def route(self, text: str, has_image: bool = False) -> RoutingPlan | None:
         text = text.strip()
         if not text and not has_image:
@@ -57,8 +64,16 @@ class RuleRouter:
                 reason="空消息留在本地聊天",
             )
 
-        # 用户明确指定 Hermes / Codex：在权限允许范围内服从。
-        if _HERMES_PATTERN.search(text):
+        # Hermes is opt-in; when disabled, direct requests remain with WhiteNight.
+        if _HERMES_PATTERN.search(text) and not self._allow_hermes:
+            return RoutingPlan(
+                category=TaskCategory.GUI,
+                executor=ExecutorChoice.WHITENIGHT,
+                risk=RiskLevel.MEDIUM,
+                confidence=0.98,
+                reason="Hermes 暂时禁用，由小白本体处理电脑操作请求",
+            )
+        if _HERMES_PATTERN.search(text) and self._allow_hermes:
             return RoutingPlan(
                 category=TaskCategory.GUI,
                 executor=ExecutorChoice.HERMES,
@@ -67,7 +82,7 @@ class RuleRouter:
                 reason="用户指定 Hermes",
                 user_override=True,
             )
-        if _CODEX_PATTERN.search(text):
+        if _CODEX_COMMAND_PATTERN.match(text):
             return RoutingPlan(
                 category=TaskCategory.CODE,
                 executor=ExecutorChoice.CODEX,
@@ -98,20 +113,24 @@ class RuleRouter:
         if _has_any(text, _CODE_PATTERNS):
             return RoutingPlan(
                 category=TaskCategory.CODE,
-                executor=ExecutorChoice.CODEX,
+                executor=ExecutorChoice.WHITENIGHT,
                 risk=RiskLevel.HIGH,
                 confidence=0.9,
-                reason="命中编码/软件工程任务规则",
+                reason="命中编码/软件工程任务规则，由小白本体处理；Codex 需使用 /codex",
                 expected_artifacts=["代码变更", "测试结果"],
             )
 
         if _has_any(text, _GUI_PATTERNS):
             return RoutingPlan(
                 category=TaskCategory.GUI,
-                executor=ExecutorChoice.HERMES,
+                executor=ExecutorChoice.HERMES if self._allow_hermes else ExecutorChoice.WHITENIGHT,
                 risk=RiskLevel.MEDIUM,
                 confidence=0.88,
-                reason="命中 GUI/跨应用操作规则",
+                reason=(
+                    "命中 GUI/跨应用操作规则"
+                    if self._allow_hermes
+                    else "命中 GUI/跨应用操作规则；Hermes 暂时禁用，由小白本体处理"
+                ),
             )
 
         if _MEMORY_PATTERN.search(text):
@@ -150,3 +169,11 @@ class RuleRouter:
             confidence=0.8,
             reason="默认本地处理（陪伴/闲聊）",
         )
+
+
+def extract_codex_prompt(text: str) -> str | None:
+    """Return the task body for a leading ``/codex`` command."""
+    match = _CODEX_COMMAND_PATTERN.match(text)
+    if match is None:
+        return None
+    return (match.group("prompt") or "").strip()

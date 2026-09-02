@@ -7,7 +7,7 @@ Build Plan Section 18 Check Items. `[ ]` means waiting for user/long-running con
 - [x] Search results include sources; web content cannot trigger unauthorized tool operations (Phase 3)
 - [x] Simple tasks, Hermes tasks and Codex tasks are routed correctly by rules (Phase 5 golden set)
 - [ ] Hermes/Codex task progress is visible, abortable, resumable or explicitly failed
-(Progress events have been implemented; Hermes real tasks are waiting for users to log in to Provider, and Codex real tasks are waiting for quota confirmation)
+(Progress events have been implemented; Hermes delegation is disabled by default, and Codex real tasks require an explicit `/codex` command.)
 - [x] All portals share the same identity, session, memory, task and permission records (Phase 2/4/5/8)
 - [x] QQ Only the owner account can trigger tools and process approvals (Phase 8 contract testing)
 - [x] Active QQ messages subject to frequency, silent period and pause status (Phase 7; real QQ sending pending NapCat)

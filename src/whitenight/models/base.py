@@ -13,11 +13,12 @@ from pydantic import BaseModel, Field
 
 
 class ProviderMessage(BaseModel):
-    """发送给模型的统一消息；images 为 base64（不含 data URL 前缀）。"""
+    """发送给模型的统一消息；images 为 base64，MIME 与其按索引对应。"""
 
     role: str
     content: str = ""
     images: list[str] = Field(default_factory=list)
+    image_mimes: list[str] = Field(default_factory=list)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None

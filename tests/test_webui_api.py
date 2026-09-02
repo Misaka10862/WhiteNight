@@ -62,12 +62,9 @@ def test_policy_rules_and_grants_revoke(client: TestClient) -> None:
     assert not service.has_session_grant("s1", "file.create")
 
 
-def test_rule_files_view_and_edit(client: TestClient) -> None:
-    soul = client.get("/api/v1/rules/SOUL")
-    assert soul.status_code == 200
-    assert client.put("/api/v1/rules/SOUL", json={"content": "# 测试人格\n"}).status_code == 200
-    assert client.get("/api/v1/rules/SOUL").text.startswith("# 测试人格")
-    assert client.get("/api/v1/rules/NOPE").status_code == 404
+def test_constraints_file_api_removed(client: TestClient) -> None:
+    assert client.get("/api/v1/rules/SOUL").status_code == 404
+    assert client.put("/api/v1/rules/SOUL", json={"content": "# 测试人格\n"}).status_code == 404
 
 
 def test_system_health(client: TestClient) -> None:
@@ -75,6 +72,17 @@ def test_system_health(client: TestClient) -> None:
     assert health["database"]["reachable"] is True
     assert "model" in health
     assert set(health["delegates"]) == {"codex", "hermes"}
+    assert health["delegates"]["hermes"]["status"] == "disabled"
+    assert "hermes" not in client.app.state.delegate_manager.providers()
+    assert health["onebot"]["health"]["reason"] in {
+        "ok",
+        "connection_refused",
+        "not_logged_in",
+        "probe_failed",
+        "timeout",
+        "http_error",
+        "invalid_json",
+    }
 
 
 def test_logs_endpoint(client: TestClient, settings) -> None:

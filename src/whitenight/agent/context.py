@@ -52,6 +52,12 @@ def _image_base64(data_url: str) -> str:
     return data_url
 
 
+def _image_mime(data_url: str) -> str | None:
+    if data_url.startswith("data:") and ";base64," in data_url:
+        return data_url[5:].split(";", 1)[0]
+    return None
+
+
 def build_provider_messages(
     history: list[MessageRecord],
     soul_text: str,
@@ -90,12 +96,14 @@ def build_provider_messages(
 
     selected.reverse()
     provider_messages: list[ProviderMessage] = [ProviderMessage(role="system", content=system)]
-    provider_messages.extend(
-        ProviderMessage(
-            role=record.role,
-            content=record.content,
-            images=[_image_base64(record.image_data_url)] if record.image_data_url else [],
+    for record in selected:
+        mime = _image_mime(record.image_data_url) if record.image_data_url else None
+        provider_messages.append(
+            ProviderMessage(
+                role=record.role,
+                content=record.content,
+                images=[_image_base64(record.image_data_url)] if record.image_data_url else [],
+                image_mimes=[mime] if mime else [],
+            )
         )
-        for record in selected
-    )
     return provider_messages

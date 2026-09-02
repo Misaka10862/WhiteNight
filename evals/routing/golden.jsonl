@@ -5,12 +5,12 @@
 {"text":"帮我搜索一下杭州的天气","has_image":false,"category":"search","executor":"whitenight"}
 {"text":"读取这个文件 /tmp/note.txt","has_image":false,"category":"file_op","executor":"whitenight"}
 {"text":"修改文件 /tmp/note.txt 的内容","has_image":false,"category":"file_op","executor":"whitenight"}
-{"text":"打开 Safari 并点击书签","has_image":false,"category":"gui","executor":"hermes"}
-{"text":"先打开备忘录再复制第一行然后保存","has_image":false,"category":"gui","executor":"hermes"}
-{"text":"用 Hermes 帮我操作电脑","has_image":false,"category":"gui","executor":"hermes"}
-{"text":"交给 Codex 修一下这个报错","has_image":false,"category":"code","executor":"codex"}
-{"text":"帮我写一个排序函数","has_image":false,"category":"code","executor":"codex"}
-{"text":"重构这个模块的代码","has_image":false,"category":"code","executor":"codex"}
+{"text":"打开 Safari 并点击书签","has_image":false,"category":"gui","executor":"whitenight"}
+{"text":"先打开备忘录再复制第一行然后保存","has_image":false,"category":"gui","executor":"whitenight"}
+{"text":"用 Hermes 帮我操作电脑","has_image":false,"category":"gui","executor":"whitenight"}
+{"text":"交给 Codex 修一下这个报错","has_image":false,"category":"code","executor":"whitenight"}
+{"text":"帮我写一个排序函数","has_image":false,"category":"code","executor":"whitenight"}
+{"text":"重构这个模块的代码","has_image":false,"category":"code","executor":"whitenight"}
 {"text":"查一下 Python 教程","has_image":false,"category":"search","executor":"whitenight"}
 {"text":"我爱你","has_image":false,"category":"companionship","executor":"whitenight"}
 {"text":"小白自己来处理这句话","has_image":false,"category":"chat","executor":"whitenight"}

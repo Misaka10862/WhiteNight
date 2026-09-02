@@ -49,8 +49,8 @@ export default function ProactivePage() {
     <section className="page" aria-label="主动消息">
       <h2>主动消息</h2>
       <p className="hint">
-        首版通过 QQ 私聊主动联系（发送器将在阶段 8 接入；当前配置与调度已生效，消息写入本地日志）。
-        候选时间按泊松过程生成，不会在错误时间集中发送。
+        主动消息按泊松过程生成，在静默时段和最近聊天抑制规则之外发送。当前投递渠道和 QQ
+        连接状态会显示在下方；发送审计只保留元数据，不保存消息正文。
       </p>
 
       <div className="panel">
@@ -125,11 +125,20 @@ export default function ProactivePage() {
               last_activity_at: data?.last_activity_at,
               last_sent_at: data?.last_sent_at,
               next_candidate_at: data?.next_candidate_at,
+              delivery: data?.delivery,
             },
             null,
             2,
           )}
         </pre>
+        <p className="muted">
+          投递：{data?.delivery?.active_sender ?? '未知'}
+          {data?.delivery?.target_user_id ? ` → QQ ${data.delivery.target_user_id}` : ''}
+          {data?.delivery?.onebot_reachable !== null && data?.delivery?.onebot_reachable !== undefined
+            ? ` · OneBot：${data.delivery.onebot_reachable ? '在线' : '离线'}`
+            : ''}
+          {data?.delivery?.available === false ? `（不可用：${data.delivery.reason}）` : ''}
+        </p>
         <p className="muted">睡眠/断网导致候选过期超过宽限期时不补发，直接重新调度。</p>
       </div>
     </section>

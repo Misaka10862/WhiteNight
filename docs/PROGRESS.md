@@ -3,7 +3,81 @@
 > This file is updated with each build: recording completed, incomplete, issues and next steps.
 > Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
-Last update: 2026-08-26 (Native character, lorebook and prompt compiler)
+Last update: 2026-09-01 (QQ native sticker delivery)
+
+## 2026-09-02 Mixed sticker sheet preparation
+
+- Created a separate nine-image set on the Desktop from the two supplied sheets using the
+  row-major selection `112121122`; the original sticker set was not modified.
+- Removed the top-center extra ear from image-1 cell 6 by masking only that protrusion and
+  preserving the transparent background. Native QQ identifiers still need to be registered
+  and added to the new catalog before delivery is enabled.
+
+## 2026-09-01 QQ outage diagnosis and emotion stickers
+
+- **Diagnosis (external service outage, not a model capability limit):** WhiteNight remained
+  healthy and its database/model calls were available.  The 05:58 shutdown followed by the
+  06:03 launchd start was a clean lifecycle restart with no crash traceback.  The current QQ
+  failure is NapCat/OneBot `127.0.0.1:3000` connection refusal; the NapCat process is not running.
+- Added structured OneBot health details to `/api/v1/system/health` and `/api/v1/onebot/status`.
+- Added a validated local sticker catalog, deterministic transparent 3×3 importer, and the
+  policy-gated `channel.sticker.send` tool.  QQ replies can now send at most one catalog sticker
+  after the final text response; image delivery is audited without storing image bytes or paths.
+- Imported the supplied 1254×1254 RGBA sheet into `data/stickers/` as nine cropped PNGs with
+  editable labels in `catalog.json`. Native QQ delivery now requires per-sticker NapCat/QQ
+  identifiers (`emoji_id` plus `emoji_package_id` or `key`); PNG-only records are intentionally
+  not sent as images. The previous PNG delivery path was removed, so QQ will never render these
+  records as ordinary image messages.
+- Pillow `12.3.0` is now declared directly (already present in the lock through python-pptx);
+  the package remains under its HPND license and no version upgrade was performed.
+
+## 2026-08-29 QQ images and reply-context repair
+
+- **Diagnosis (deterministic program defects, not an 8B capability limit):** the
+  active `deepseek-v4-flash-vision-exp` OpenAI-compatible provider was blocked by
+  the stale text-model `model_supports_vision=false` gate.  If that gate were
+  bypassed, `OpenAIProvider` still discarded `ProviderMessage.images` instead of
+  serializing Chat Completions `image_url` content parts.  QQ input could also
+  silently lose a NapCat local-cache/file-id/CQ-string image; failed URL downloads
+  degraded to text.  These failures occurred before a multimodal model received
+  an image.
+- The model Provider now advertises its own visual capability (`qwen3-vl`/vision
+  Ollama models and OpenAI-compatible vision requests), while an explicit
+  text-only configuration still wins.  OpenAI-compatible requests serialize each
+  inbound image as a data-URL `image_url` part and preserve PNG/JPEG/GIF/WebP MIME.
+- The OneBot adapter now accepts HTTP URLs, `base64://`, local NapCat image cache
+  files, file IDs (via `get_image` then `get_file` fallback), and legacy CQ-string
+  message payloads.  Every source is size/type checked before the core sees it;
+  unreadable images receive an explicit QQ error instead of an invisible text-only
+  fallback.
+- **QQ reply-message diagnosis (deterministic program gap):** `reply` segments
+  were parsed as neither text nor context, so the model had no information about
+  the message being answered.  The adapter now resolves the quoted `message_id`
+  through OneBot `get_msg`, inserts bounded original text with an explicit
+  untrusted-context marker, and reports unavailable quotes without fabricating
+  their contents.  Remaining reply quality after the original text is supplied is
+  a normal model-understanding limit, not a missing-channel-data issue.
+- Verification: focused Provider/OneBot/context tests plus full `uv run pytest`
+  passed: **226 passed, 4 skipped**.  Ruff and strict mypy pass.
+
+## 2026-08-29 Dashboard Provider and proactive delivery repair
+
+- Added a Dashboard Provider form with the required Ollama/OpenAI-compatible choice, model/Base URL fields, Keychain-only API-key entry, immediate runtime switching and persisted non-secret configuration.
+- Added a “Fetch” action beside the model name. It queries Ollama `/api/tags` or an OpenAI-compatible `/models` endpoint and lets the user choose from returned model IDs without persisting a temporary API key.
+- Diagnosed and fixed cloud chat 400 responses: DeepSeek rejects dotted internal tool names such as `file.find`; the OpenAI-compatible adapter now maps tool names to the provider-safe `[A-Za-z0-9_-]+` grammar in both directions, including follow-up tool messages. This was a deterministic program defect, not an 8B model capability issue.
+- Added a launchd-scoped “Restart WhiteNight service” action with explicit rejection when the backend is not launchd-managed.
+- Diagnosed proactive delivery: messages were generated successfully but the configured sender defaulted to `log`, so they never reached QQ. The current local runtime is now configured for `proactive_sender: qq`; missing QQ prerequisites no longer silently fall back to logs.
+- Proactive delivery status is visible in the WebUI. New delivery records contain only metadata (timestamp, target, result, retry count, length/hash), never message bodies; historical logs are retained.
+
+## 2026-08-29 WebUI availability repair
+
+- Diagnosed Dashboard unavailability as the Vite process exiting while the backend
+  launchd service remained healthy (`8765` reachable, `5173` not listening).
+- Added `deploy/com.whitenight.web.plist.template` and
+  `scripts/install_webui_launchd.sh` so the local Vite server runs as an independent
+  `com.whitenight.web` user service with `RunAtLoad` and `KeepAlive`.
+- Kept the backend service, database, and existing source behavior unchanged; verified
+  the WebUI HTML, `/api` proxy, and browser-rendered navigation after recovery.
 
 ## 2026-08-26 personality and context compiler
 
@@ -70,7 +144,8 @@ Last update: 2026-08-26 (Native character, lorebook and prompt compiler)
   `config/whitenight.yaml`, not written to this repository), the backend has been restarted to take effect.
 Actual test: `qq_link_check.py` outputs `QQ LINK READY`; real QQ receives two messages - direct test
   (OneBotSender) Closed-loop reply to simulated private chat events via "Adapter → Session → qwen3:8b → Reply to QQ";
-  `get_friend_msg_history` Review delivery. `proactive_sender: qq` Optional (default is still log).
+  `get_friend_msg_history` Review delivery. `proactive_sender: qq` is now active for the local runtime;
+  the Dashboard reports OneBot reachability and does not silently fall back to log delivery.
 - **Final audit (this round)**: `scripts/diagnostics.py --json` all green (DB integrity/alembic 0007,
   Ollama, Codex CLI, Hermes Gateway, disk/attachment); `scripts/e2e_smoke.py --real-model`
   Output `E2E SMOKE OK (real-ollama)`; `./scripts/check.sh` 142 passed / 4 skipped All green;
@@ -156,17 +231,16 @@ Now `parse_segments` recognizes poke segments and injects explicit context "(The
 - Report: `docs/reports/phase5-verification.md` (completed with submission)
 
 ### Stage 6 · Complete WebUI ✅ (this round)
-- Workbench navigation: Chat/Session/Memory/Task/Approval/Permissions/Model/Constraints/Active/Log/Backup
+- Workbench navigation: Chat/Session/Memory/Task/Approval/Permissions/Model/Active/Log/Backup; character/persona editing lives on the Characters page
 - Chat page: conversation list, streaming bubbles, pictures, delegated task event bubbles; conversation page: rename/export/delete
 - Memory page: retrieval, fact addition, modification and deletion, conflict retention/discard, episodic memory, JSONL/Markdown export
 - Task page: Performer/Status/Risk/Product/Error/Abort; Approval page: Risk/Parameter Summary/Allow/Deny
 - Permission page: Tool risk rules + session authorization revocation; Model page: DB/Model/Hermes/Codex Health
-- Constraint page: SOUL.md / AGENTS.md View and edit (server-side safe writing)
 - Active message/log/backup page: honest occupancy (capabilities are accessed in stages 7/10 respectively, no false switches are made)
 - Backend supporting API: session rename/delete/export, approvals approve/reject, policy rules/grants,
-  system health, rules read and write; 102 passed / 4 skipped
+  and system health; 102 passed / 4 skipped
 - Narrow window responsive layout + keyboard Enter to send + navigation/aria tag
-- Actual test: full link of session/memory/task/approval/permission/model/rules under Vite agent + real Ollama streaming chat passed
+- Actual test: full link of session/memory/task/approval/permission/model under Vite agent + real Ollama streaming chat passed
 - Report: `docs/reports/phase6-verification.md`
 
 ### Stage 7 · Backend services and proactive behaviors ✅ (this round)
@@ -200,7 +274,8 @@ Now `parse_segments` recognizes poke segments and injects explicit context "(The
 - Candidate validation accepts `reviewed=false`; the training gate rejects every sample until the
   user records final acceptance. No candidate is currently training-ready.
 - **User Instructions**: Suspend the training first and use the local `qwen3:8b` text model + SOUL.md personality run-through minimum verification.
-- The code has switched to the default `model_name=qwen3:8b`, `model_supports_vision=false`;
+- The code uses the default `model_name=qwen3:8b`; visual capability is now inferred from the
+  selected Provider unless an explicit text-only override is configured;
   The picture message will clearly state that "the temporary text model cannot be viewed for the time being" instead of being misinterpreted.
 - To be official LoRA: switch back to `qwen3-vl:8b` + `model_supports_vision=true`, and then train/blind test again.
 
@@ -236,6 +311,13 @@ Known gaps within the stage:
 - Semantic recall is turned off by default: when `embedding_model` is empty, there is only FTS5 lexicon. Natural language questions need to be equipped with a small embedding model first.
 
 ## Problem record
+
+16. ✅ **QQ image and sticker event parsing (2026-08-30)**: NapCat image/custom-sticker segments may contain
+numeric IDs, while the old `dict[str, str]` event model rejected the whole event before parsing. `mface`,
+`market_face`, `sticker`, and `emoji` were also absent from the media path, and built-in `face` segments were
+silently ignored. The parser now accepts untrusted extension values and normalizes IDs; custom-sticker URLs,
+cache paths, base64 payloads, and file tokens reuse the image download and vision path. Built-in faces remain
+visible as an explicit `[QQ face]` context marker. Reply-message support is retained.
 
 14. ✅ **QQ file/picture download failed (2026-08-19)**: The download request error inherited the desktop agent and was not followed
 NapCat common redirects; now fixed direct connect, follow redirects, streaming limit of 16 MiB, and image MIME awareness by response type.
@@ -301,3 +383,11 @@ WHITENIGHT_TEST_OLLAMA=1 uv run pytest tests/test_ollama_provider.py -q
 uv run alembic upgrade head # Database migration
 uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
 ```
+## 2026-09-02 maintenance
+
+- Hermes delegation is now opt-in (`hermes_enabled: false` by default); disabled deployments do not
+  start or register the Hermes gateway and route GUI requests to WhiteNight locally.
+- Codex delegation now requires a leading `/codex` command; the prefix is removed before task
+  submission, while ordinary coding requests remain local.
+- Removed the WebUI constraints editor and its SOUL/AGENTS file API. Character and persona edits
+  remain on the Characters page; `AGENTS.md` remains local engineering metadata.

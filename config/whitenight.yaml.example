@@ -30,7 +30,9 @@ model_provider: ollama       # ollama | openai
 openai_base_url: https://api.openai.com/v1
 openai_api_key_account: openai_api_key
 openai_timeout_s: 120.0
-model_supports_vision: false   # Set true when returning to qwen3-vl:8b.
+# Omit (or set null) to use the selected Provider's capability.  Set false only
+# when deliberately using a text-only model.
+model_supports_vision:
 model_max_output_tokens: 2048  # Ollama num_predict cap prevents runaway generation.
 model_context_tokens: 32768
 # Optional local HuggingFace tokenizer.json. Empty means Provider-enforced context only.
@@ -48,6 +50,7 @@ memory_extract_max_tokens: 512  # Limit extraction so it yields the inference sl
 embedding_model: ""
 
 # Delegated executors (stage 5)
+hermes_enabled: false         # Disabled by default; WhiteNight handles GUI requests locally.
 hermes_gateway_url: http://127.0.0.1:9119
 hermes_managed: true
 hermes_command: hermes
@@ -69,7 +72,7 @@ proactive_quiet_start: "23:00"
 proactive_quiet_end: "08:00"
 proactive_suppress_minutes: 60
 proactive_skip_grace_minutes: 45
-proactive_sender: log           # log | none | qq (select qq after NapCat setup)
+proactive_sender: log           # log | none | qq; QQ mode targets the first owner_ids
 
 # QQ / OneBot (stage 8; NapCat login requires user interaction)
 qq_enabled: false

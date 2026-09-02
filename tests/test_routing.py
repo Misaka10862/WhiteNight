@@ -44,12 +44,14 @@ def test_golden_routing_accuracy() -> None:
     assert accuracy >= 0.9, "\n".join([f"accuracy={accuracy:.2f}", *failures])
 
 
-def test_user_override_wins() -> None:
+def test_codex_override_still_requires_command() -> None:
     async def run() -> None:
         engine = RoutingEngine(rule_router=RuleRouter(), allow_llm_fallback=False)
         plan = await engine.route("帮我写个排序函数", user_override="hermes")
-        assert plan.executor.value == "hermes"
+        assert plan.executor.value == "whitenight"
         plan = await engine.route("今天天气不错", user_override="codex")
+        assert plan.executor.value == "whitenight"
+        plan = await engine.route("/codex 写个排序函数", user_override="codex")
         assert plan.executor.value == "codex"
 
     asyncio.run(run())
@@ -57,7 +59,13 @@ def test_user_override_wins() -> None:
 
 def test_rule_router_basic_cases() -> None:
     router = RuleRouter()
-    assert router.route("帮我写一个函数").executor.value == "codex"
-    assert router.route("打开 Safari").executor.value == "hermes"
+    assert router.route("帮我写一个函数").executor.value == "whitenight"
+    assert router.route("/codex 帮我写一个函数").executor.value == "codex"
+    assert router.route("打开 Safari").executor.value == "whitenight"
     assert router.route("还记得我喜欢什么吗").executor.value == "whitenight"
     assert router.route("帮我搜索一下教程").executor.value == "whitenight"
+
+
+def test_hermes_can_be_enabled_explicitly() -> None:
+    router = RuleRouter(allow_hermes=True)
+    assert router.route("打开 Safari").executor.value == "hermes"

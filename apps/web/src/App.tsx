@@ -7,13 +7,12 @@ import TasksPage from './pages/TasksPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import PermissionsPage from './pages/PermissionsPage'
 import ModelsPage from './pages/ModelsPage'
-import RulesPage from './pages/RulesPage'
 import ProactivePage from './pages/ProactivePage'
 import LogsPage from './pages/LogsPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import CharactersPage from './pages/CharactersPage'
 
-type Tab = 'chat' | 'sessions' | 'characters' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'rules' | 'active' | 'logs' | 'backup'
+type Tab = 'chat' | 'sessions' | 'characters' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'active' | 'logs' | 'backup'
 
 const TABS: { id: Tab; label: string; title: string }[] = [
   { id: 'chat', label: '聊天', title: '聊天' },
@@ -24,7 +23,6 @@ const TABS: { id: Tab; label: string; title: string }[] = [
   { id: 'approvals', label: '审批', title: '审批' },
   { id: 'permissions', label: '权限', title: '权限' },
   { id: 'models', label: '模型', title: '模型与 Agent' },
-  { id: 'rules', label: '约束', title: '临时约束' },
   { id: 'active', label: '主动', title: '主动消息' },
   { id: 'logs', label: '日志', title: '运行日志' },
   { id: 'backup', label: '备份', title: '备份与恢复' },
@@ -121,7 +119,6 @@ export default function App() {
           {tab === 'approvals' && <ApprovalsPage />}
           {tab === 'permissions' && <PermissionsPage />}
           {tab === 'models' && <ModelsPage />}
-          {tab === 'rules' && <RulesPage />}
           {tab === 'active' && <ProactivePage />}
           {tab === 'logs' && <LogsPage />}
           {tab === 'backup' && (

@@ -78,6 +78,10 @@ class OllamaMemoryExtractor:
     def __init__(self, provider: ModelProvider) -> None:
         self._provider = provider
 
+    def set_provider(self, provider: ModelProvider) -> None:
+        """Replace the provider used by future extraction requests."""
+        self._provider = provider
+
     async def extract(self, messages: list[MessageRecord]) -> ExtractionResult:
         transcript = "\n".join(
             f"{message.id} [{message.role}] {message.content}" for message in messages[-20:]

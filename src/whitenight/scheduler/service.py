@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,7 @@ from whitenight.config import Settings
 from whitenight.memory.service import MemoryService
 from whitenight.models.base import ModelProvider, ProviderMessage
 from whitenight.personality.store import PersonalityStore
+from whitenight.policy.audit import AuditService
 from whitenight.scheduler.poisson import (
     local_naive_to_utc,
     next_candidate,
@@ -35,7 +37,7 @@ class ProactiveSender(Protocol):
 
 
 class LogSender:
-    """阶段 7 默认发送器：写入本地日志；阶段 8 换成 QQ OneBot 发送器。"""
+    """本地审计发送器：只写元数据，不写主动消息正文。"""
 
     def __init__(self, log_path: Path) -> None:
         self.log_path = log_path
@@ -43,7 +45,12 @@ class LogSender:
     def send(self, message: str, metadata: dict[str, object]) -> bool:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(
-            {"ts": datetime.now(UTC).isoformat(), "message": message, **metadata},
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "message_chars": len(message),
+                "message_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+                **metadata,
+            },
             ensure_ascii=False,
         )
         with self.log_path.open("a", encoding="utf-8") as handle:
@@ -66,6 +73,7 @@ class ProactiveService:
         sender: ProactiveSender,
         settings: Settings,
         personalities: PersonalityStore | None = None,
+        audit: AuditService | None = None,
     ) -> None:
         self._store = store
         self._provider = provider
@@ -73,6 +81,20 @@ class ProactiveService:
         self._sender = sender
         self._settings = settings
         self._personalities = personalities
+        self._audit = audit
+        self._last_delivery_error: str | None = None
+
+    def set_provider(self, provider: ModelProvider) -> None:
+        """Replace the provider used by future proactive messages."""
+        self._provider = provider
+
+    def set_sender(self, sender: ProactiveSender) -> None:
+        """Replace the delivery channel used by future proactive messages."""
+        self._sender = sender
+
+    @property
+    def last_delivery_error(self) -> str | None:
+        return self._last_delivery_error
 
     def status(self) -> ProactiveStatus:
         return self._store.status()
@@ -184,17 +206,47 @@ class ProactiveService:
 
     async def _send_with_retries(self, message: str, max_attempts: int = 2) -> bool:
         owner_user_id = self._settings.qq_owner_ids[0] if self._settings.qq_owner_ids else None
+        channel = self._settings.proactive_sender
         for attempt in range(1, max_attempts + 1):
             try:
-                metadata: dict[str, object] = {"channel": "proactive", "attempt": attempt}
+                metadata: dict[str, object] = {"channel": channel, "attempt": attempt}
                 if owner_user_id is not None:
                     metadata["user_id"] = owner_user_id
                 if self._sender.send(message, metadata):
+                    self._last_delivery_error = None
+                    if self._audit:
+                        self._audit.record(
+                            actor="scheduler",
+                            action="proactive.sent",
+                            decision="auto",
+                            params_summary=(
+                                f"channel={channel} user_id={owner_user_id} "
+                                f"message_chars={len(message)} "
+                                f"message_sha256={hashlib.sha256(message.encode('utf-8')).hexdigest()} "
+                                f"attempt={attempt}"
+                            ),
+                            result_summary="主动消息发送成功（不含正文）",
+                            channel=channel,
+                        )
                     return True
             except Exception as exc:
+                self._last_delivery_error = str(exc)
                 logger.warning("主动消息发送失败 attempt=%s：%s", attempt, exc)
             if attempt < max_attempts:
                 await asyncio.sleep(2 * attempt)
+        if self._audit:
+            self._audit.record(
+                actor="scheduler",
+                action="proactive.failed",
+                decision="error",
+                params_summary=(
+                    f"channel={channel} user_id={owner_user_id} message_chars={len(message)} "
+                    f"message_sha256={hashlib.sha256(message.encode('utf-8')).hexdigest()} "
+                    f"attempts={max_attempts}"
+                ),
+                result_summary=f"主动消息发送失败：{self._last_delivery_error or 'sender returned false'}",
+                channel=channel,
+            )
         return False
 
     async def run_forever(self, stop: asyncio.Event, interval_s: int = 30) -> None:
@@ -202,7 +254,7 @@ class ProactiveService:
             try:
                 outcome = await self.tick()
                 if outcome.action == "sent":
-                    logger.info("已发送主动消息：%s", outcome.message)
+                    logger.info("已发送主动消息 chars=%s", len(outcome.message or ""))
             except Exception:
                 logger.exception("主动消息循环异常")
             try:
