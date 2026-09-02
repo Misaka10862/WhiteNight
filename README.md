@@ -2,7 +2,7 @@
 
 [Chinese description](README-zh.md)
 
-WhiteNight (White Night) is a versatile personal AI agent that provides a unified interface for conversation, memory, tool use, and channel integrations. The project emphasizes auditable authorization, credential isolation, and replaceable Provider interfaces.
+WhiteNight is a versatile personal AI agent that provides a unified interface for conversation, memory, tool use, and channel integrations. The project emphasizes auditable authorization, credential isolation, and replaceable Provider interfaces.
 
 In addition to practical automation, WhiteNight includes dedicated optimizations for emotionally attentive companionship. Persona-aware prompting, long-term memory, continuity across sessions, context-sensitive tone, and optional proactive messaging are designed to support a more consistent and respectful relationship over time while preserving explicit safety and permission boundaries.
 
