@@ -3,7 +3,14 @@
 > This file is updated with each build: recording completed, incomplete, issues and next steps.
 > Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
-Last update: 2026-09-01 (QQ native sticker delivery)
+Last update: 2026-09-02 (README synchronization)
+
+## 2026-09-02 README synchronization
+
+- Synchronized the English README with the updated Chinese version, including the broader product
+  positioning, `qwen3` wording, post-AGI long-term vision, and operating-system/chat-platform
+  roadmap. Corrected minor Chinese capitalization and spacing in the roadmap; no code or dependency
+  changes were made.
 
 ## 2026-09-02 Mixed sticker sheet preparation
 

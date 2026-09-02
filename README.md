@@ -2,11 +2,13 @@
 
 [Chinese description](README-zh.md)
 
-WhiteNight is a local-first personal AI agent for macOS. It provides a unified interface for conversation, memory, tool execution, and channel integrations, with an emphasis on auditable authorization, credential isolation, and replaceable Provider interfaces.
+WhiteNight (White Night) is a versatile personal AI agent that provides a unified interface for conversation, memory, tool use, and channel integrations. The project emphasizes auditable authorization, credential isolation, and replaceable Provider interfaces.
 
 In addition to practical automation, WhiteNight includes dedicated optimizations for emotionally attentive companionship. Persona-aware prompting, long-term memory, continuity across sessions, context-sensitive tone, and optional proactive messaging are designed to support a more consistent and respectful relationship over time while preserving explicit safety and permission boundaries.
 
-The default configuration uses the local Ollama `qwen3:8b` text model with persona context from `SOUL.md`. WhiteNight also supports OpenAI-compatible Chat Completions APIs. When a cloud Provider is enabled, its API key is read exclusively from macOS Keychain.
+The default configuration uses a local Ollama `qwen3` text model with persona context from `SOUL.md`. WhiteNight also supports OpenAI-compatible Chat Completions APIs. When a cloud Provider is enabled, its API key is read exclusively from macOS Keychain.
+
+The project's goal is to build a complete, all-in-one agent for the post-AGI era that combines support for work tasks with emotionally attentive companionship. In the long term, as AI and embodied intelligence advance, she will not be limited to accompanying users as software on a computer; she may also provide support and companionship in the real world through forms such as humanoid or other biomimetic robots.
 
 ## Features
 
@@ -19,14 +21,10 @@ The default configuration uses the local Ollama `qwen3:8b` text model with perso
 - Ollama and OpenAI-compatible model Providers
 - Encrypted backups, diagnostics, log redaction, and security regression tests
 
-Hermes delegation is disabled by default while WhiteNight's native tool layer is being expanded.
-Set `hermes_enabled: true` only when the Hermes gateway is intentionally configured. Codex is
-invoked only by starting a message with `/codex`; ordinary coding requests stay in WhiteNight.
-
-The current distribution targets macOS and QQ through OneBot/NapCat. Its channel and Provider
-boundaries are deliberately kept replaceable so that broader chat-platform coverage and support
-for additional operating systems can be introduced incrementally without changing the core
-conversation, memory, policy, and personality model.
+The current version targets macOS and connects to QQ through OneBot/NapCat. Channel and Provider
+boundaries remain replaceable; future development will gradually add support for operating systems
+such as Windows, Linux, and Android, as well as chat platforms such as Feishu, WhatsApp, and
+Telegram.
 
 ## Repository Layout
 
