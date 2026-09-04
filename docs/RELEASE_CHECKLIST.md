@@ -1,27 +1,48 @@
-# First version release acceptance list
+# First-version release acceptance
 
-Build Plan Section 18 Check Items. `[ ]` means waiting for user/long-running confirmation.
+Current review: 2026-09-04. A checked implementation item means code and automated coverage exist;
+it does not certify live channels, long-running operation or a published release.
 
-- [x] WebUI stabilizes chat, recognizes images, processes agreed documents and restores historical sessions (actual test in phase 2/3/6)
-- [x] Correctly remember, display, modify and delete user preferences and episodic memory (Phase 4)
-- [x] Search results include sources; web content cannot trigger unauthorized tool operations (Phase 3)
-- [x] Simple tasks, Hermes tasks and Codex tasks are routed correctly by rules (Phase 5 golden set)
-- [ ] Hermes/Codex task progress is visible, abortable, resumable or explicitly failed
-(Progress events have been implemented; Hermes delegation is disabled by default, and Codex real tasks require an explicit `/codex` command.)
-- [x] All portals share the same identity, session, memory, task and permission records (Phase 2/4/5/8)
-- [x] QQ Only the owner account can trigger tools and process approvals (Phase 8 contract testing)
-- [x] Active QQ messages subject to frequency, silent period and pause status (Phase 7; real QQ sending pending NapCat)
-- [x] Deleting a single file will go to the trash by default; batch deletion cannot be performed by the Agent (Phase 3 Red Team)
-- [x] WebUI and services only listen natively; credentials are not written in clear text to logs or configuration (ADR-0002 + desensitization)
-- [ ] No repeated recovery/lost tasks/string memory on restart, sleep wake-up and network interruption
-(Restart and resume actual measurement; sleep wake-up and long-term network interruption will be tested for 72 hours)
-- [ ] 72 hours of continuous operation without blocking failures and obvious memory leaks (script ready, to be executed)
-- [ ] When there is no resident personality prompt, the final LoRA model passes the user personality blind test (stage 9 is pending for GPU/user)
+## Implementation and automated coverage
 
-## Must be done before publishing
+- [x] Chat request identity, session isolation, terminal-event persistence, cancellation and restart handling.
+- [x] WebUI stream ownership, approval-scope distinction, IME behavior and document-upload client contracts.
+- [x] Typed tool parameters, bound approvals, one-time consumption, policy enforcement and batch-delete refusal.
+- [x] Task outcomes preserve uncertainty; unsafe or unknown-effect work is not automatically retried.
+- [x] Memory maintenance is bounded, resumable and isolated from unavailable embedding backends.
+- [x] SQLite/SQLCipher backup verification and restore; retained database/resource generations; interruption recovery.
+- [x] Shared service/exclusive maintenance locks, including direct Alembic commands.
+- [x] WebUI backup creation, verification, preview and download; offline restore procedure.
+- [x] Local checks include strict mypy and frontend behavior tests without installing dependencies.
 
-1. `./scripts/check.sh` + `uv run mypy src/whitenight` All green.
-2. Backup → Migration drill → Recovery drill once (real data directory).
-3. `uv run scripts/run_72h.py --hours 72`。
-4. The user completes the LoRA blind test and selects the default model; continue to use SOUL.md before completion.
-5. GitHub push (first `gh auth refresh -s workflow`).
+## Evidence required for release
+
+- [x] Record the final `./scripts/check.sh` result: 332 Python tests passed, 4 optional integrations skipped,
+  and 13 frontend behavior tests passed; see the dated project-review report.
+- [x] Record isolated browser interaction and desktop/narrow-window screenshots for the revised workflows.
+- [ ] Complete a new 72-hour report with healthy required components, complete sampling and no unexplained
+  task stalls or memory growth. A shorter run only validates the monitoring tool.
+- [ ] Exercise sleep/wake and network interruption, checking duplicate replies, request/task terminal states,
+  recovery and memory isolation; record timing and results.
+- [ ] Perform an explicitly scheduled production backup → migration → recovery drill with a verified backup.
+  Isolated test databases do not replace this operational acceptance step.
+- [ ] Validate current-version real QQ owner-only delivery and proactive scheduling when external delivery
+  is authorized. Historical NapCat success is not a fresh current-version result.
+- [ ] Validate an explicitly requested real Codex read-only task, including progress and verified cancellation,
+  before advertising that live capability as accepted.
+
+## Intentionally unavailable or paused
+
+- Codex write delegation is rejected until a Provider demonstrates per-action policy/approval enforcement.
+  A read-only task must not resume an older thread with unverified sandbox permissions.
+- Hermes remains disabled by default. Authentication alone does not establish a safe task/approval contract.
+- LoRA training and personality blind testing remain paused by user decision. They are prerequisites only
+  for a future LoRA-specific release claim, not a reason to silently resume paid training.
+- GitHub Actions remains disabled by project decision. No workflow-scope refresh is required merely to
+  deliver this review; hosted automation must not be re-enabled as an incidental fix.
+
+## Final delivery
+
+- [x] Preserve unrelated user work; record the final verification results and remaining live-test limitations.
+- Delivery requires one English commit and remote revision verification before reporting completion.
+  The commit identifier and remote state are determined by Git after this checklist is recorded.

@@ -169,9 +169,23 @@ export interface MessageRecord {
   session_id: string
   sequence: number
   role: 'system' | 'user' | 'assistant' | 'tool'
-  kind: 'text' | 'image' | 'tool_call' | 'tool_result'
+  kind: 'text' | 'image' | 'file' | 'tool_call' | 'tool_result'
   content: string
   image_data_url: string | null
+  created_at: string
+  attachments?: AttachmentRecord[]
+}
+
+export interface AttachmentRecord {
+  id: string
+  name: string
+  size?: number
+  status?: string
+}
+
+export interface BackupRecord {
+  id: string
+  size: number
   created_at: string
 }
 
@@ -354,7 +368,11 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(`${init?.method ?? 'GET'} ${url} failed: ${response.status} ${body}`)
   }
   if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  const result = await response.json()
+  if (result && typeof result === 'object' && result.ok === false) {
+    throw new Error(String(result.reason ?? result.message ?? '操作未完成'))
+  }
+  return result as T
 }
 
 // --- sessions / chat ---
@@ -440,9 +458,11 @@ export const fetchTasks = (sessionId?: string) =>
   jsonFetch<TaskRecord[]>(sessionId ? `/api/v1/tasks?session_id=${sessionId}` : '/api/v1/tasks')
 export const abortTask = (id: string) =>
   jsonFetch<TaskRecord>(`/api/v1/tasks/${id}/abort`, { method: 'POST' })
+export const retryTask = (id: string) =>
+  jsonFetch<TaskRecord>(`/api/v1/tasks/${id}/retry`, { method: 'POST' })
 export const fetchPendingApprovals = () =>
   jsonFetch<PendingApproval[]>('/api/v1/approvals/pending')
-export const approveRequest = (code: string, sessionId?: string | null) =>
+export const approveRequest = (code: string, sessionId: string | null, scope: 'once' | 'session') =>
   jsonFetch<{
     ok: boolean
     reason: string
@@ -452,7 +472,7 @@ export const approveRequest = (code: string, sessionId?: string | null) =>
   }>(`/api/v1/approvals/${code}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId ?? null }),
+    body: JSON.stringify({ session_id: sessionId, scope }),
   })
 export const rejectRequest = (code: string) =>
   jsonFetch<{ ok: boolean; reason: string }>(`/api/v1/approvals/${code}/reject`, { method: 'POST' })
@@ -566,4 +586,25 @@ export async function fetchLogs(lines = 200): Promise<string> {
 export function chatWebSocketUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   return `${protocol}://${window.location.host}/api/v1/chat/ws`
+}
+
+export const cancelChat = (requestId: string) =>
+  jsonFetch<{ ok: boolean }>(`/api/v1/chat/${encodeURIComponent(requestId)}/cancel`, { method: 'POST' })
+export const uploadAttachment = (sessionId: string, file: File) =>
+  jsonFetch<AttachmentRecord>(`/api/v1/sessions/${sessionId}/attachments?filename=${encodeURIComponent(file.name)}`, {
+    method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file,
+  })
+export const fetchBackups = () => jsonFetch<BackupRecord[]>('/api/v1/backups')
+export const createBackup = () => jsonFetch<BackupRecord>('/api/v1/backups', { method: 'POST' })
+export const verifyBackup = (id: string) => jsonFetch<Record<string, unknown>>(`/api/v1/backups/${encodeURIComponent(id)}/verify`, { method: 'POST' })
+export const previewBackup = (id: string) => jsonFetch<Record<string, unknown>>(`/api/v1/backups/${encodeURIComponent(id)}/preview`, { method: 'POST' })
+export async function downloadBackup(id: string): Promise<void> {
+  const response = await fetch(`/api/v1/backups/${encodeURIComponent(id)}/download`)
+  if (!response.ok) throw new Error(`备份下载失败：${response.status}`)
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = id
+  anchor.click()
+  URL.revokeObjectURL(url)
 }

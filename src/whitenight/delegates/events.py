@@ -8,7 +8,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from whitenight.events import EventEnvelope
 
 DelegateEventType = Literal[
     "queued",
@@ -22,7 +24,7 @@ DelegateEventType = Literal[
 ]
 
 
-class DelegateEvent(BaseModel):
+class DelegateEvent(EventEnvelope):
     task_id: str
     executor: Literal["whitenight", "hermes", "codex"]
     type: DelegateEventType
@@ -34,6 +36,26 @@ class DelegateEvent(BaseModel):
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
     ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def normalize_envelope(self) -> DelegateEvent:
+        self.actor = self.executor
+        self.kind = {
+            "queued": "plan",
+            "started": "progress",
+            "approval_required": "approval",
+            "artifact": "result",
+        }.get(self.type, self.type)
+        self.status = {
+            "result": "succeeded",
+            "error": "failed",
+            "aborted": "aborted",
+            "approval_required": "waiting_approval",
+        }.get(self.type, "running")
+        reported = self.payload.get("status")
+        if reported in {"awaiting_review", "cancelling", "cancel_failed"}:
+            self.status = str(reported)
+        return self
 
 
 class DelegationRequest(BaseModel):

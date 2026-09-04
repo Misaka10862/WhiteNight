@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
 from collections.abc import AsyncIterator
+from contextlib import suppress
+from dataclasses import asdict
 from typing import Any
 
-from whitenight.delegates.base import DelegateError, DelegateUnavailableError
+from whitenight.delegates.base import DelegateCapabilities, DelegateError, DelegateUnavailableError
 from whitenight.delegates.events import DelegateEvent, DelegationRequest
 
 _PROTOCOL_VERSION = "2025-03-26"
@@ -34,6 +38,8 @@ class CodexMcpClient:
         self._process: asyncio.subprocess.Process | None = None
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._close_lock = asyncio.Lock()
+        self._reader: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._process is not None:
@@ -45,6 +51,7 @@ class CodexMcpClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise DelegateUnavailableError(
@@ -64,8 +71,9 @@ class CodexMcpClient:
 
     async def _read_loop(self) -> None:
         assert self._process and self._process.stdout
+        stdout = self._process.stdout
         while True:
-            line = await self._process.stdout.readline()
+            line = await stdout.readline()
             if not line:
                 for future in self._pending.values():
                     if not future.done():
@@ -78,6 +86,8 @@ class CodexMcpClient:
                 continue
             if "id" in message and message["id"] in self._pending:
                 future = self._pending.pop(message["id"])
+                if future.done():
+                    continue
                 if "error" in message:
                     future.set_exception(DelegateError(str(message["error"])))
                 else:
@@ -138,27 +148,45 @@ class CodexMcpClient:
         return result
 
     async def close(self) -> None:
-        if self._process is None:
-            return
-        process, self._process = self._process, None
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=5)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-        if getattr(self, "_reader", None):
-            self._reader.cancel()
+        async with self._close_lock:
+            if self._process is None:
+                return
+            process = self._process
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except TimeoutError:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    await process.wait()
+                # The MCP parent may exit before children that ignored SIGTERM.
+                # The session belongs to this task, so terminate any remaining group members.
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            self._process = None
+            for future in self._pending.values():
+                if not future.done():
+                    future.set_exception(DelegateError("Codex 执行进程已停止"))
+            self._pending.clear()
+            if self._reader is not None:
+                self._reader.cancel()
+                await asyncio.gather(self._reader, return_exceptions=True)
+                self._reader = None
 
 
 class CodexAdapter:
     """Codex 编码任务执行器（MCP stdio）。"""
 
     name = "codex"
+    capabilities = DelegateCapabilities(read_only=True)
 
     def __init__(self, command: str = "codex", timeout_s: float = 1800.0) -> None:
         self._command = command
         self._timeout_s = timeout_s
+        self._clients: dict[str, CodexMcpClient] = {}
+        self._starts: dict[str, asyncio.Task[None]] = {}
 
     async def health(self) -> dict[str, object]:
         client = CodexMcpClient(self._command)
@@ -169,6 +197,8 @@ class CodexAdapter:
                 "provider": "codex-mcp",
                 "available": True,
                 "tools": [tool.get("name") for tool in tools],
+                "execution_capabilities": asdict(self.capabilities),
+                "limitation": "仅支持明确只读任务；写任务需要逐动作策略契约",
             }
         except Exception as exc:
             return {"provider": "codex-mcp", "available": False, "error": str(exc)}
@@ -176,9 +206,16 @@ class CodexAdapter:
             await client.close()
 
     async def submit(self, request: DelegationRequest) -> AsyncIterator[DelegateEvent]:
+        if request.sandbox != "read-only" or request.thread_id:
+            # codex-reply cannot override an existing thread's sandbox. Never resume
+            # a thread whose original permissions have not been verified locally.
+            raise DelegateUnavailableError("Codex 当前仅允许新建只读隔离任务")
         client = CodexMcpClient(self._command, timeout_s=self._timeout_s)
+        self._clients[request.task_id] = client
         try:
-            await client.start()
+            start = asyncio.create_task(client.start())
+            self._starts[request.task_id] = start
+            await start
             yield DelegateEvent(
                 task_id=request.task_id,
                 executor="codex",
@@ -200,7 +237,7 @@ class CodexAdapter:
                     arguments["sandbox"] = request.sandbox
                 else:
                     arguments["sandbox"] = "workspace-write"
-                arguments["approval-policy"] = "on-request"
+                arguments["approval-policy"] = "never"
                 result = await client.call_tool(_TOOL_NEW, arguments)
 
             content, thread_id = _extract_codex_result(result)
@@ -210,7 +247,7 @@ class CodexAdapter:
                 type="result",
                 step="codex-mcp",
                 label="Codex 任务完成",
-                detail=content[:2000],
+                detail=content,
                 payload={"thread_id": thread_id} if thread_id else {},
             )
         except DelegateError:
@@ -219,11 +256,20 @@ class CodexAdapter:
             raise DelegateError(f"Codex MCP 调用失败：{exc}") from exc
         finally:
             await client.close()
+            self._clients.pop(request.task_id, None)
+            self._starts.pop(request.task_id, None)
 
     async def abort(self, task_id: str, thread_id: str | None = None) -> bool:
-        # Codex MCP 没有独立 abort 工具；断开本进程连接。线程可恢复，
-        # 下次用 thread_id 走 codex-reply 续接，因此中止是安全的。
-        del task_id, thread_id
+        del thread_id
+        client = self._clients.get(task_id)
+        if client is None:
+            return False
+        start = self._starts.get(task_id)
+        if start is not None:
+            # Do not report stopped while subprocess startup can still complete.
+            with suppress(Exception):
+                await asyncio.shield(start)
+        await client.close()
         return True
 
 

@@ -8,7 +8,13 @@ from pathlib import Path
 
 from whitenight.agent.service import ChatService
 from whitenight.channels.types import ChannelContext, ChatRequest
-from whitenight.models.base import ModelChunk, ProviderMessage, ToolCall, ToolSpec
+from whitenight.models.base import (
+    ModelCapabilities,
+    ModelChunk,
+    ProviderMessage,
+    ToolCall,
+    ToolSpec,
+)
 from whitenight.policy.approvals import ApprovalService
 from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import PolicyEngine
@@ -16,6 +22,7 @@ from whitenight.storage.sessions import SessionStore
 from whitenight.tools import (
     ChannelFileSendTool,
     FileFindTool,
+    FileMoveTool,
     FileReadTool,
     FileWriteTool,
     ToolExecutor,
@@ -25,6 +32,8 @@ from whitenight.tools.pending import PendingToolStore
 
 
 class FindProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     async def stream_chat(
         self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
     ) -> AsyncGenerator[ModelChunk, None]:
@@ -51,6 +60,8 @@ class FindProvider:
 
 
 class AttachmentContextProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     def __init__(self, attachment: Path) -> None:
         self.attachment = attachment
 
@@ -73,6 +84,8 @@ class AttachmentContextProvider:
 
 
 class WriteProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -98,7 +111,74 @@ class WriteProvider:
         return {"ok": True}
 
 
+class RepeatingInvalidMoveProvider:
+    capabilities = ModelCapabilities(tools=True)
+
+    """Models a small model retrying an unchanged invalid move call."""
+
+    def __init__(self, source: Path, destination: Path) -> None:
+        self.source = source
+        self.destination = destination
+
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        assert tools and any(tool.name == "file.move" for tool in tools)
+        tool_messages = [message for message in messages if message.role == "tool"]
+        if len(tool_messages) < 2:
+            yield ModelChunk(
+                done=True,
+                tool_calls=[
+                    ToolCall(
+                        id=f"move-{len(tool_messages)}",
+                        name="file.move",
+                        arguments={
+                            "source": str(self.source),
+                            "destination": str(self.destination),
+                        },
+                    )
+                ],
+            )
+            return
+        assert "已跳过模型重复调用" in tool_messages[-1].content
+        yield ModelChunk(delta="请重新发送可用的源文件。")
+        yield ModelChunk(done=True)
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
+
+
+class UnexpectedProviderCall:
+    capabilities = ModelCapabilities(tools=True)
+
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        del messages, tools
+        raise AssertionError("provider must not be called when the attachment is unavailable")
+        yield ModelChunk(done=True)
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
+
+
+class UnexpectedMoveProvider:
+    capabilities = ModelCapabilities(tools=True)
+
+    async def stream_chat(
+        self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
+    ) -> AsyncGenerator[ModelChunk, None]:
+        del messages, tools
+        raise AssertionError("direct attachment move should not call the model")
+        yield ModelChunk(done=True)
+
+    async def health(self) -> dict[str, object]:
+        return {"ok": True}
+
+
 class ParallelReadProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     def __init__(self, first: Path, second: Path) -> None:
         self.first = first
         self.second = second
@@ -127,6 +207,8 @@ class ParallelReadProvider:
 
 
 class StallingFileDeliveryProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     def __init__(self, root: Path) -> None:
         self.root = root
 
@@ -182,6 +264,8 @@ class FailingDelivery:
 
 
 class UnauthorizedSendProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     async def stream_chat(
         self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
     ) -> AsyncGenerator[ModelChunk, None]:
@@ -203,6 +287,8 @@ class UnauthorizedSendProvider:
 
 
 class AmbiguousFileDeliveryProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     def __init__(self, root: Path) -> None:
         self.root = root
 
@@ -233,6 +319,8 @@ class AmbiguousFileDeliveryProvider:
 
 
 class WrongRootFileDeliveryProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     def __init__(self, wrong_root: Path) -> None:
         self.wrong_root = wrong_root
 
@@ -326,6 +414,100 @@ def test_write_approval_resumes_original_call(engine, settings, tmp_path):
     resumed = asyncio.run(service.resume_approval(code, ChannelContext(channel="web")))
     assert resumed[-1].type == "done"
     assert path.read_text(encoding="utf-8") == "new"
+
+
+def test_repeated_invalid_move_call_is_returned_to_model_without_crashing(
+    engine, settings, tmp_path
+):
+    source = tmp_path / "missing.exe"
+    destination = tmp_path / "Desktop" / "pvzHE" / "missing.exe"
+    destination.parent.mkdir(parents=True)
+    service, store, _ = _service(
+        engine,
+        settings,
+        RepeatingInvalidMoveProvider(source, destination),
+        [FileMoveTool()],
+    )
+    session = store.create_session()
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="把这个文件移动到桌面 pvzHE 文件夹")
+            )
+        ]
+
+    events = asyncio.run(run())
+
+    assert not any(event.type == "error" for event in events)
+    assert events[-1].type == "done"
+    assert events[-1].text == "请重新发送可用的源文件。"
+
+
+def test_missing_qq_attachment_blocks_move_before_model_guess(engine, settings):
+    service, store, _ = _service(
+        engine,
+        settings,
+        UnexpectedProviderCall(),
+        [FileMoveTool()],
+    )
+    session = store.create_session()
+    store.record_attachment_message(
+        session.id,
+        "AdobeAnimateEditor.exe",
+        channel="onebot",
+        error="文件接收失败：超过当前 16 MiB 限制",
+    )
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="把这个文件放到桌面的 pvzHE 文件夹下")
+            )
+        ]
+
+    events = asyncio.run(run())
+
+    assert events[-1].type == "done"
+    assert events[-1].text == (
+        "刚才的文件没有成功接收：文件接收失败：超过当前 16 MiB 限制。请重新发送文件后，我再帮你移动。"
+    )
+
+
+def test_recent_qq_attachment_move_gets_deterministic_approval(
+    engine, settings, tmp_path, monkeypatch
+):
+    attachment = settings.data_dir / "qq_files" / "received.zip"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_bytes(b"zip")
+    destination = tmp_path / "Desktop" / "pvzHE"
+    destination.mkdir(parents=True)
+    service, store, approvals = _service(
+        engine,
+        settings,
+        UnexpectedMoveProvider(),
+        [FileMoveTool()],
+    )
+    session = store.create_session()
+    store.record_attachment_message(session.id, "received.zip", channel="onebot", path=attachment)
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text="把这个文件放到桌面 pvzHE 文件夹下")
+            )
+        ]
+
+    events = asyncio.run(run())
+
+    assert events[-1].type == "done"
+    assert "需要审批" in events[-1].text
+    assert len(approvals.list_pending()) == 1
 
 
 def test_chat_accepts_parallel_tool_calls_and_returns_each_result(engine, settings, tmp_path):
@@ -449,7 +631,7 @@ def test_send_tool_cannot_run_without_current_delivery_intent(engine, settings):
     events = asyncio.run(run())
     assert delivery.sent == []
     assert events[-1].type == "error"
-    assert events[-1].message and "未开放的工具" in events[-1].message
+    assert events[-1].message and "模型调用失败" in events[-1].message
 
 
 def test_ambiguous_file_delivery_asks_before_sending(engine, settings, tmp_path):
@@ -497,10 +679,10 @@ def test_candidate_selection_followup_restores_current_delivery_intent(engine, s
     history = store.list_messages(session.id)
 
     assert history[-1].id == current.id
-    assert service._requires_file_delivery(
+    assert service._files._requires_file_delivery(
         "第 2 个", history, ChannelContext(channel="onebot", target="10001")
     )
-    assert not service._requires_file_delivery(
+    assert not service._files._requires_file_delivery(
         "算了", history, ChannelContext(channel="onebot", target="10001")
     )
 
@@ -516,7 +698,7 @@ def test_natural_send_me_phrase_enables_file_delivery(engine, settings):
     history = store.list_messages(session.id)
 
     assert history[-1].id == current.id
-    assert service._requires_file_delivery(
+    assert service._files._requires_file_delivery(
         current.content,
         history,
         ChannelContext(channel="onebot", target="10001"),
@@ -574,11 +756,7 @@ def test_local_model_receives_verified_recent_qq_attachment(engine, settings) ->
         [],
     )
     session = store.create_session()
-    store.add_message(
-        session.id,
-        "user",
-        f"[QQ 文件] report.docx 已保存到 {attachment.resolve()}",
-    )
+    store.record_attachment_message(session.id, "report.docx", channel="onebot", path=attachment)
 
     async def run():
         return [

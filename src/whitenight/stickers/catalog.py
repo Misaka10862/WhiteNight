@@ -29,13 +29,19 @@ class StickerRecord(BaseModel):
     use_when: list[str] = Field(default_factory=list, max_length=20)
     avoid_when: list[str] = Field(default_factory=list, max_length=20)
     enabled: bool = True
-    segment_type: Literal["mface", "market_face"] = "mface"
+    # NapCat represents personal QQ custom faces as an ``image`` segment with
+    # ``sub_type=1``.  Marketplace faces use the explicit ``mface`` segment.
+    segment_type: Literal["mface", "market_face", "image"] = "mface"
+    sub_type: int = Field(default=0, ge=0, le=255)
     emoji_id: str | None = None
     emoji_package_id: str | None = None
     key: str | None = None
+    native_url: str | None = Field(default=None, max_length=4096)
 
     @property
     def native_ready(self) -> bool:
+        if self.segment_type == "image":
+            return self.sub_type == 1 and bool(self.native_url)
         return bool(self.emoji_id and (self.key or self.emoji_package_id))
 
 
@@ -74,6 +80,10 @@ class StickerCatalog:
                 raise StickerCatalogError(f"表情文件必须位于目录内：{record.file}")
             if relative.suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                 raise StickerCatalogError(f"表情文件必须是常见图片格式：{record.file}")
+            if record.native_url and not record.native_url.startswith(("http://", "https://")):
+                raise StickerCatalogError(f"原生表情地址必须是 HTTP(S) URL：{record.native_url}")
+            if record.segment_type == "image" and record.sub_type != 1:
+                raise StickerCatalogError("QQ 自定义动画表情必须使用 image/sub_type=1")
             candidate = self.root / relative
             if candidate.is_symlink():
                 raise StickerCatalogError(f"表情文件不能是符号链接：{record.file}")

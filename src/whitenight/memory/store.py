@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Engine, text
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session as OrmSession
 
+from whitenight.memory.models import MemoryJob, MemoryVector
 from whitenight.memory.types import (
     EpisodeCreate,
     EpisodeRecord,
@@ -168,6 +172,7 @@ class MemoryStore:
             old.status = "superseded"
             old.superseded_by = new.id
             old.conflict_state = "resolved"
+            self._discard_vector(orm, f"{old.key}：{old.value}")
             orm.commit()
             return self._fact_record(new)
 
@@ -179,6 +184,7 @@ class MemoryStore:
             fact.status = "deleted"
             fact.conflict_state = "resolved"
             fact.updated_at = _now()
+            self._discard_vector(orm, f"{fact.key}：{fact.value}")
             orm.commit()
 
     def resolve_fact_conflict(self, fact_id: str, keep: bool) -> FactRecord | None:
@@ -191,6 +197,8 @@ class MemoryStore:
                 orm.query(ProfileFact)
                 .filter(
                     ProfileFact.key == winner.key,
+                    ProfileFact.character_id == winner.character_id,
+                    ProfileFact.owner_namespace == winner.owner_namespace,
                     ProfileFact.status == "active",
                     ProfileFact.id != winner.id,
                 )
@@ -222,10 +230,14 @@ class MemoryStore:
             try:
                 fact_ids = orm.scalars(
                     text(
-                        "SELECT id FROM profile_facts_fts "
-                        "WHERE profile_facts_fts MATCH :q ORDER BY rank LIMIT :limit"
+                        "SELECT f.id FROM profile_facts_fts "
+                        "JOIN profile_facts f ON f.id = profile_facts_fts.id "
+                        "WHERE profile_facts_fts MATCH :q AND f.status = 'active' "
+                        "AND f.conflict_state != 'conflicted' "
+                        "AND (:character_id IS NULL OR f.character_id = :character_id) "
+                        "ORDER BY rank LIMIT :limit"
                     ),
-                    {"q": fts_query, "limit": limit},
+                    {"q": fts_query, "limit": limit, "character_id": character_id},
                 ).all()
             except Exception:  # FTS 语法/环境异常回退 LIKE
                 fact_ids = []
@@ -303,6 +315,7 @@ class MemoryStore:
                 raise MemoryNotFoundError(episode_id)
             episode.deleted_at = _now()
             episode.updated_at = _now()
+            self._discard_vector(orm, episode.content)
             orm.commit()
 
     def touch_episode(self, episode_id: str) -> None:
@@ -324,10 +337,13 @@ class MemoryStore:
             try:
                 episode_ids = orm.scalars(
                     text(
-                        "SELECT id FROM episodic_memories_fts "
-                        "WHERE episodic_memories_fts MATCH :q ORDER BY rank LIMIT :limit"
+                        "SELECT e.id FROM episodic_memories_fts "
+                        "JOIN episodic_memories e ON e.id = episodic_memories_fts.id "
+                        "WHERE episodic_memories_fts MATCH :q AND e.deleted_at IS NULL "
+                        "AND (:character_id IS NULL OR e.character_id = :character_id) "
+                        "ORDER BY rank LIMIT :limit"
                     ),
-                    {"q": fts_query, "limit": limit},
+                    {"q": fts_query, "limit": limit, "character_id": character_id},
                 ).all()
             except Exception:
                 episode_ids = []
@@ -366,6 +382,9 @@ class MemoryStore:
         self, session_id: str, summary: str, start_sequence: int, end_sequence: int
     ) -> None:
         with self._orm() as orm:
+            job = orm.get(MemoryJob, session_id)
+            if job is not None and job.summary_sequence > end_sequence:
+                return
             orm.query(SessionSummaryRecord).filter(
                 SessionSummaryRecord.session_id == session_id
             ).delete()
@@ -377,6 +396,125 @@ class MemoryStore:
                     end_sequence=end_sequence,
                 )
             )
+            if job is None:
+                job = MemoryJob(session_id=session_id)
+                orm.add(job)
+            job.summary_sequence = end_sequence
+            job.updated_at = _now()
+            orm.commit()
+
+    def summary_checkpoint(self, session_id: str) -> int:
+        with self._orm() as orm:
+            job = orm.get(MemoryJob, session_id)
+            return job.summary_sequence if job else 0
+
+    def queue_maintenance(self, session_id: str, sequence: int, delay_s: float = 0) -> None:
+        """Coalesce work by session; cancellation never removes this durable request."""
+        now = _now()
+        statement = insert(MemoryJob).values(
+            session_id=session_id,
+            target_sequence=sequence,
+            completed_sequence=0,
+            summary_sequence=0,
+            attempts=0,
+            next_attempt_at=now + timedelta(seconds=delay_s),
+            updated_at=now,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[MemoryJob.session_id],
+            set_={
+                "target_sequence": text(
+                    "max(memory_jobs.target_sequence, excluded.target_sequence)"
+                ),
+                "next_attempt_at": statement.excluded.next_attempt_at,
+                "updated_at": statement.excluded.updated_at,
+            },
+        )
+        with self._orm() as orm:
+            orm.execute(statement)
+            orm.commit()
+
+    def pending_maintenance(self, *, due_only: bool = True) -> list[tuple[str, int]]:
+        with self._orm() as orm:
+            query = orm.query(MemoryJob).filter(
+                MemoryJob.target_sequence > MemoryJob.completed_sequence
+            )
+            if due_only:
+                query = query.filter(
+                    MemoryJob.next_attempt_at.is_(None) | (MemoryJob.next_attempt_at <= _now())
+                )
+            return [
+                (job.session_id, job.target_sequence)
+                for job in query.order_by(MemoryJob.updated_at).all()
+            ]
+
+    def complete_maintenance(self, session_id: str, sequence: int) -> None:
+        with self._orm() as orm:
+            job = orm.get(MemoryJob, session_id)
+            if job is not None:
+                job.completed_sequence = max(job.completed_sequence, sequence)
+                job.attempts = 0
+                job.next_attempt_at = None
+                job.updated_at = _now()
+                orm.commit()
+
+    def defer_maintenance(self, session_id: str) -> None:
+        """Record retry metadata only; never store a provider error or conversation body."""
+        with self._orm() as orm:
+            job = orm.get(MemoryJob, session_id)
+            if job is not None:
+                job.attempts += 1
+                seconds = min(300, 2 ** min(job.attempts, 8))
+                job.next_attempt_at = _now() + timedelta(seconds=seconds)
+                job.updated_at = _now()
+                orm.commit()
+
+    def cached_vectors(self, keys: list[str]) -> dict[str, list[float]]:
+        result: dict[str, list[float]] = {}
+        with self._orm() as orm:
+            for offset in range(0, len(keys), 300):
+                rows = orm.query(MemoryVector).filter(
+                    MemoryVector.cache_key.in_(keys[offset : offset + 300])
+                )
+                for row in rows:
+                    try:
+                        vector = json.loads(row.vector_json)
+                        if (
+                            isinstance(vector, list)
+                            and len(vector) == row.dimensions
+                            and vector
+                            and all(
+                                isinstance(x, (int, float)) and math.isfinite(x) for x in vector
+                            )
+                        ):
+                            result[row.cache_key] = [float(x) for x in vector]
+                    except (ValueError, TypeError):
+                        continue
+        return result
+
+    def cache_vector(
+        self, key: str, model_key: str, content_hash: str, vector: list[float]
+    ) -> None:
+        if not vector or not all(math.isfinite(value) for value in vector):
+            return
+        statement = insert(MemoryVector).values(
+            cache_key=key,
+            model_key=model_key,
+            content_hash=content_hash,
+            vector_json=json.dumps(vector),
+            dimensions=len(vector),
+            updated_at=_now(),
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[MemoryVector.cache_key],
+            set_={
+                "vector_json": statement.excluded.vector_json,
+                "dimensions": statement.excluded.dimensions,
+                "updated_at": statement.excluded.updated_at,
+            },
+        )
+        with self._orm() as orm:
+            orm.execute(statement)
             orm.commit()
 
     def get_session_summary(self, session_id: str) -> str | None:
@@ -406,6 +544,11 @@ class MemoryStore:
             orm.commit()
 
     # ---- helpers -------------------------------------------------------
+
+    @staticmethod
+    def _discard_vector(orm: OrmSession, content: str) -> None:
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+        orm.query(MemoryVector).filter(MemoryVector.content_hash == content_hash).delete()
 
     def _fact_record(self, fact: ProfileFact) -> FactRecord:
         return FactRecord(

@@ -10,6 +10,7 @@ from pathlib import Path
 from whitenight.agent.context import SAFETY_KERNEL
 from whitenight.channels.types import MessageRecord
 from whitenight.memory.service import MemoryService
+from whitenight.memory.types import MemoryHit
 from whitenight.models.base import ProviderMessage, ToolSpec
 from whitenight.personality.store import PersonalityStore
 from whitenight.personality.token_counter import TokenCounter
@@ -56,6 +57,31 @@ class PromptCompiler:
     def tokenizer_available(self) -> bool:
         return self._counter.available
 
+    async def compile_async(
+        self,
+        session_id: str,
+        history: list[MessageRecord],
+        query: str,
+        *,
+        runtime_constraints: list[str] | None = None,
+        tools: list[ToolSpec] | None = None,
+        attempt: int = 0,
+        persist_trace: bool = True,
+    ) -> tuple[list[ProviderMessage], PromptPreview, str | None]:
+        """Prefetch provider-dependent memory before running the synchronous compiler."""
+        character_id, _persona_id = self._personalities.session_identity(session_id)
+        hits = await self._memory.aretrieve(query, limit=8, character_id=character_id)
+        return self.compile(
+            session_id,
+            history,
+            query,
+            runtime_constraints=runtime_constraints,
+            tools=tools,
+            attempt=attempt,
+            persist_trace=persist_trace,
+            memory_hits=hits,
+        )
+
     def compile(
         self,
         session_id: str,
@@ -66,6 +92,7 @@ class PromptCompiler:
         tools: list[ToolSpec] | None = None,
         attempt: int = 0,
         persist_trace: bool = True,
+        memory_hits: list[MemoryHit] | None = None,
     ) -> tuple[list[ProviderMessage], PromptPreview, str | None]:
         character_id, _persona_id = self._personalities.session_identity(session_id)
         character = self._personalities.get_character(character_id)
@@ -193,7 +220,11 @@ class PromptCompiler:
                 f'<conversation-summary data-only="true">\n{summary}\n</conversation-summary>',
                 "memory",
             )
-        hits = self._memory.retrieve(query, limit=8, character_id=character_id)
+        hits = (
+            memory_hits
+            if memory_hits is not None
+            else self._memory.retrieve_lexical(query, limit=8, character_id=character_id)
+        )
         if hits:
             memory_text = "\n".join(
                 f"- [{hit.item_type}:{hit.item_id}] {hit.content}" for hit in hits

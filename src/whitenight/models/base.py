@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable
 from typing import Any, Protocol, runtime_checkable
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +52,33 @@ class ModelChunk(BaseModel):
 
 class ModelProviderError(RuntimeError):
     """Provider 调用失败（网络、超时、协议错误）。"""
+
+    def __init__(
+        self,
+        message: str = "模型服务暂时不可用",
+        *,
+        category: str = "provider_error",
+        status: int | None = None,
+    ) -> None:
+        self.category = category
+        self.status = status
+        self.error_id = uuid4().hex[:12]
+        super().__init__(message)
+
+    @classmethod
+    def http_failure(cls, status: int) -> ModelProviderError:
+        return cls(f"模型服务返回 HTTP {status}", category="http_error", status=status)
+
+
+class ModelCapabilities(BaseModel):
+    tools: bool = False
+    vision: bool | None = None
+
+
+def model_capabilities(provider: ModelProvider) -> ModelCapabilities:
+    """Undeclared third-party providers remain text-only until they opt in."""
+    value = getattr(provider, "capabilities", None)
+    return value if isinstance(value, ModelCapabilities) else ModelCapabilities()
 
 
 @runtime_checkable

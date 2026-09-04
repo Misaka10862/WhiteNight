@@ -58,15 +58,21 @@ def test_low_write_requires_session_grant(executor) -> None:
     assert outcome.approval_code
     assert not target.exists()
 
-    # 只有 session 范围审批能通过该工具
-    resolution = service.resolve_once(
-        outcome.approval_code, session_id="s1", expected_scope="session"
+    # 会话授权只能来自用户明确选择；批准后由绑定执行器消费。
+    resolution = service.approve(
+        outcome.approval_code, session_id="s1", expected_scope="session", grant_scope="session"
     )
     assert resolution.ok
 
-    outcome = tool.execute("file.create", {"path": str(target), "content": "你好"}, session_id="s1")
+    outcome = tool.execute(
+        "file.create",
+        {"path": str(target), "content": "你好"},
+        session_id="s1",
+        approval_id=resolution.approval_id,
+    )
     assert outcome.status == "ok"
     assert target.read_text(encoding="utf-8") == "你好"
+    assert service.has_session_grant("s1", "file.create")
 
 
 def test_medium_write_requires_once_approval_and_code_is_single_use(executor) -> None:
@@ -84,7 +90,7 @@ def test_medium_write_requires_once_approval_and_code_is_single_use(executor) ->
         approval_code=waiting.approval_code,
     )
     # 审批成功，但代码属于 once，参数可以相同；第一次执行通过
-    assert refused.status in {"ok", "refused"}
+    assert refused.status == "ok"
 
     # 重新申请并消费后，旧代码不可重放
     second = tool.execute("file.write", {"path": str(path), "content": "第二次"}, session_id="s1")
@@ -113,7 +119,15 @@ def test_session_approval_cannot_approve_medium_tool(executor) -> None:
     )
     assert not resolution.ok
     # 原 once 代码仍然可用，防止被降级绕过
-    assert service.resolve_once(waiting.approval_code, session_id="s1", expected_scope="once").ok
+    assert (
+        tool.execute(
+            "file.write",
+            {"path": str(path), "content": "新"},
+            session_id="s1",
+            approval_code=waiting.approval_code,
+        ).status
+        == "ok"
+    )
 
 
 def test_delete_requires_approval_and_goes_to_trash(executor, monkeypatch) -> None:

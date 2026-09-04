@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-15
+- Historical decision: request identity, replay and cancellation semantics are extended by ADR-0005 and `docs/contracts/chat-ws.md` (v0.3).
 
 ## Background
 

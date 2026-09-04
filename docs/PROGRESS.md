@@ -3,7 +3,70 @@
 > This file is updated with each build: recording completed, incomplete, issues and next steps.
 > Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
-Last update: 2026-09-02 (README synchronization)
+Last update: 2026-09-04 (architecture hardening implemented and verified)
+
+## 2026-09-04 architecture hardening
+
+- The accepted implementation plan retains a single process and introduces incremental
+  application boundaries, durable state, storage maintenance and behavioral regression gates.
+- Diagnosis: the review found deterministic storage rollback, approval, browser origin,
+  error disclosure, delegate lifecycle, async I/O, memory coverage and attachment state defects.
+  Dependent tool calls may originate in model planning, but require deterministic scheduling.
+- Baseline: 241 passed, 4 optional integrations skipped; static backend/frontend checks pass.
+- Evidence and final verification are tracked in `docs/reports/project-review-2026-09-04.md`.
+- Existing LoRA pause, opt-in Hermes, explicit `/codex` routing and disabled hosted Actions remain.
+- Stages A–E are implemented: locked/journaled SQLite and SQLCipher maintenance; bound approvals;
+  correlated request state; bounded tool and memory execution; structural attachment receipts;
+  modular application/configuration services; scoped WebUI streams, file uploads and backup UI.
+- Final unified gate: **332 passed, 4 skipped**, **13 frontend behavior tests passed**;
+  Ruff, formatting, strict mypy (113 source modules), TypeScript/Vite, secrets and English checks pass.
+- Real browser acceptance passed against the isolated fixture for session/page changes,
+  cancellation, authorization scope, files, backups, model failures and service disconnects;
+  desktop/narrow screenshots remain in the ignored data directory. No production service restart,
+  private-data restore, real outbound message or paid model/agent task was performed.
+- Additional deterministic integration fixes: terminal-event CAS, repeated cancellation drain,
+  restore commit uncertainty, portable attachment paths and versioned Keychain configuration.
+- This delivery includes the previously pending QQ/sticker implementation baseline. The unrelated
+  pre-existing SOUL.md edit remains uncommitted. One final English commit/push is the delivery policy.
+
+The entries below preserve dated historical measurements. Older references to "this round",
+an ongoing monitor or a former stage completion do not supersede this summary or FINAL_STATUS.md.
+
+## 2026-09-03 QQ file-move recovery
+
+- **Diagnosis (two causes):** the live OneBot log showed that `AdobeAnimateEditor.exe`
+  (94 MiB) exceeded the 16 MiB QQ receive limit, so no verified local source was created.
+  The model then retried an unchanged move call, and the orchestration layer turned that
+  recoverable model behavior into a duplicate-tool-call runtime error. The
+  missing attachment-state handoff and the fatal duplicate-call handling were deterministic
+  program defects; the repeated call itself is a small-model capability boundary.
+- Failed QQ file receipt is now persisted as explicit session context and reports a precise
+  size-limit/retry message. A request to move that unavailable attachment is stopped before
+  model inference, so it cannot invent a source path. Repeated identical tool calls now receive
+  a structured refusal result and let the model recover; tool parameters still pass through the
+  existing type, policy, and approval layers.
+- Verification: focused file-tool, chat-tool, and OneBot tests pass (**54 passed**); Ruff and
+  strict mypy pass for the changed source modules.
+- Follow-up diagnosis: a later 946 KiB attachment was saved correctly and `pvzHE` existed, but
+  the model emitted prose without calling `file.move`; no move audit or approval was created.
+  Explicit recent-attachment moves to a server-resolved directory now create the normal
+  `file.move` approval deterministically before model inference. Full verification after this
+  follow-up passed: **241 passed, 4 skipped**, with Ruff, mypy, frontend checks, and the
+  technical-English audit all clean.
+
+## 2026-09-03 QQ native custom-face binding
+
+- **Diagnosis (deterministic integration mismatch):** the running NapCat account emits saved
+  personal custom faces as `image` segments with `sub_type=1`; the previous implementation only
+  emitted the marketplace `mface` segment and the runtime catalog still referenced stale
+  `sticker-01.png` files. This is a protocol/catalog mismatch, not a model capability issue.
+- Added `OneBotSender.send_private_sticker()` for NapCat's personal-face transport. It sends the
+  registered QQ URL with `sub_type=1`, which QQ renders as its animated-face type; marketplace
+  `mface` delivery is retained separately.
+- Added `scripts/sync_qq_stickers.py`, which binds the 18 local assets to QQ's saved-face remarks
+  via `fetch_custom_face_detail`, and refreshed the local runtime catalog. The model still sees
+  only labels and stable IDs; delivery remains owner-only, policy-audited, one-per-turn, and after
+  the final text.
 
 ## 2026-09-02 README synchronization
 

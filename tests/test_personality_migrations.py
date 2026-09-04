@@ -74,6 +74,10 @@ def test_upgrade_assigns_legacy_data_and_downgrade_preserves_content(tmp_path: P
             connection.execute("SELECT content FROM messages WHERE id='m1'").fetchone()[0]
             == "旧消息"
         )
+        assert connection.execute(
+            "SELECT target_sequence, completed_sequence, summary_sequence "
+            "FROM memory_jobs WHERE session_id='s1'"
+        ).fetchone() == (1, 0, 0)
     finally:
         connection.close()
     assert list((data_dir / "backups").glob("pre-migrate-0008-*.db"))
@@ -83,6 +87,12 @@ def test_upgrade_assigns_legacy_data_and_downgrade_preserves_content(tmp_path: P
     try:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(sessions)")}
         assert "character_id" not in columns
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name IN ('memory_vectors', 'memory_jobs')"
+            ).fetchall()
+            == []
+        )
         assert (
             connection.execute("SELECT content FROM messages WHERE id='m1'").fetchone()[0]
             == "旧消息"

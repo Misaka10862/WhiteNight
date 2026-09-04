@@ -8,11 +8,26 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from whitenight.events import EventEnvelope
+
 MessageRole = Literal["system", "user", "assistant", "tool"]
-MessageKind = Literal["text", "image", "tool_call", "tool_result"]
+MessageKind = Literal["text", "image", "file", "tool_call", "tool_result"]
+
+
+class AttachmentRecord(BaseModel):
+    id: str
+    name: str
+    status: Literal["ready", "failed"]
+    source_message_id: str | None = None
+    path: str | None = None
+    mime: str | None = None
+    size: int = 0
+    sha256: str | None = None
+    error: str | None = None
 
 
 class ChannelContext(BaseModel):
@@ -58,17 +73,20 @@ class MessageRecord(BaseModel):
     content: str = ""
     image_data_url: str | None = None
     created_at: datetime
+    attachments: list[AttachmentRecord] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
     """WebSocket 聊天请求：渠道无关的统一入站消息。"""
 
     session_id: str
+    request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=64)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
     text: str = Field(default="", max_length=64_000)
     image_data_url: str | None = Field(default=None, max_length=16_000_000)
 
 
-class ChatEvent(BaseModel):
+class ChatEvent(EventEnvelope):
     """标准化聊天事件（WebSocket 传输用）。"""
 
     type: Literal["start", "chunk", "done", "error", "task", "tool", "approval"]

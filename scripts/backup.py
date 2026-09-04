@@ -1,86 +1,69 @@
 #!/usr/bin/env python3
-"""WhiteNight encrypted backup and restore CLI (stage 10).
+"""Encrypted backup CLI; recovery keys are read only from Keychain.
 
-Provide the recovery key through WHITENIGHT_BACKUP_KEY or --passphrase.
-Generate an independent recovery key:
-    uv run scripts/backup.py generate-key
-Create a backup using SQLite online backup:
-    uv run scripts/backup.py backup --output data/backups/whitenight.bak
-Verify, preview, or restore (stop the service before restoring):
-    uv run scripts/backup.py verify --input <bak>
-    uv run scripts/backup.py preview --input <bak>
-    uv run scripts/backup.py restore --input <bak>
+Initialize a key with generate-key, or import an existing key using configure-key.
+Stop the service before restore; recover resumes an interrupted restore journal.
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
-import os
-import sys
 from pathlib import Path
 
 from whitenight.config import load_settings
+from whitenight.credentials.keychain import get_keychain
 from whitenight.storage.backup import (
     create_backup,
-    generate_recovery_key,
+    recover_interrupted_restore,
+    resolve_recovery_key,
     restore_apply,
     restore_preview,
     verify_backup,
 )
 
 
-def passphrase(args: argparse.Namespace) -> str:
-    value = args.passphrase or os.environ.get("WHITENIGHT_BACKUP_KEY")
-    if not value:
-        print("Missing recovery key: use --passphrase or WHITENIGHT_BACKUP_KEY", file=sys.stderr)
-        raise SystemExit(2)
-    return value
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    gen = sub.add_parser("generate-key")
-    gen.add_argument("--words", type=int, default=0)
-
+    sub.add_parser("generate-key")
+    sub.add_parser("configure-key")
+    sub.add_parser("recover")
     backup = sub.add_parser("backup")
     backup.add_argument("--output", required=True, type=Path)
-    backup.add_argument("--passphrase", default=None)
-
-    for name in ("verify", "preview"):
+    for name in ("verify", "preview", "restore"):
         parser_cmd = sub.add_parser(name)
         parser_cmd.add_argument("--input", required=True, type=Path)
-        parser_cmd.add_argument("--passphrase", default=None)
-
-    restore = sub.add_parser("restore")
-    restore.add_argument("--input", required=True, type=Path)
-    restore.add_argument("--passphrase", default=None)
-
     args = parser.parse_args()
-    if args.command == "generate-key":
-        print(generate_recovery_key())
-        print("Store this recovery key offline; it is independent from Keychain.", file=sys.stderr)
-        return 0
-
     settings = load_settings()
-    phrase = passphrase(args)
+    if args.command == "generate-key":
+        resolve_recovery_key(settings, create=True)
+        print("Recovery key configured in Keychain; existing keys are retained.")
+        return 0
+    if args.command == "configure-key":
+        phrase = getpass.getpass("Recovery key: ")
+        if not phrase or phrase != getpass.getpass("Confirm recovery key: "):
+            parser.error("Recovery key is empty or confirmation does not match")
+        keychain = get_keychain(settings.keychain_backend)
+        if keychain.get(settings.keychain_service, "backup-recovery-key"):
+            parser.error("A recovery key already exists; manage replacement explicitly in Keychain")
+        keychain.set(settings.keychain_service, "backup-recovery-key", phrase)
+        print("Recovery key stored in Keychain.")
+        return 0
+    if args.command == "recover":
+        print(json.dumps(recover_interrupted_restore(settings), ensure_ascii=False))
+        return 0
+    phrase = resolve_recovery_key(settings)
     if args.command == "backup":
         path = create_backup(settings, args.output, phrase)
-        print(json.dumps({"backup": str(path), "size": path.stat().st_size}, ensure_ascii=False))
-        return 0
-    if args.command == "verify":
-        print(json.dumps(verify_backup(args.input, phrase), ensure_ascii=False, indent=2))
-        return 0
-    if args.command == "preview":
-        print(json.dumps(restore_preview(args.input, phrase), ensure_ascii=False, indent=2))
-        return 0
-    result = restore_apply(
-        settings,
-        args.input,
-        phrase,
-        service_health_url=os.environ.get("WHITENIGHT_URL", "http://127.0.0.1:8765"),
-    )
+        result: dict[str, object] = {"backup": str(path), "size": path.stat().st_size}
+    elif args.command == "verify":
+        result = verify_backup(args.input, phrase)
+    elif args.command == "preview":
+        result = restore_preview(args.input, phrase)
+    else:
+        result = restore_apply(settings, args.input, phrase)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

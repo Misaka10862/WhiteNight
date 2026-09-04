@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -17,6 +19,7 @@ from whitenight.models.base import ModelProvider, ProviderMessage
 from whitenight.personality.store import PersonalityStore
 from whitenight.policy.audit import AuditService
 from whitenight.scheduler.poisson import (
+    _in_quiet,
     local_naive_to_utc,
     next_candidate,
     utc_naive_to_local,
@@ -74,6 +77,7 @@ class ProactiveService:
         settings: Settings,
         personalities: PersonalityStore | None = None,
         audit: AuditService | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._store = store
         self._provider = provider
@@ -83,6 +87,9 @@ class ProactiveService:
         self._personalities = personalities
         self._audit = audit
         self._last_delivery_error: str | None = None
+        self._clock = clock or datetime.now
+        self._tick_lock = asyncio.Lock()
+        self._delivery_skip: SendOutcome | None = None
 
     def set_provider(self, provider: ModelProvider) -> None:
         """Replace the provider used by future proactive messages."""
@@ -128,16 +135,50 @@ class ProactiveService:
         self._store.set_next_candidate(local_naive_to_utc(candidate))
 
     async def tick(self, local_now: datetime | None = None) -> SendOutcome:
-        local_now = local_now or datetime.now()
+        async with self._tick_lock:
+            return await self._tick(local_now)
+
+    def _current_status(self, local_now: datetime) -> ProactiveStatus:
         status = self._store.status()
+        if (
+            status.paused
+            and status.paused_until
+            and utc_naive_to_local(status.paused_until) <= local_now
+        ):
+            self._store.resume()
+            return self._store.status()
+        return status
+
+    @staticmethod
+    def _eligibility(status: ProactiveStatus, local_now: datetime) -> SendOutcome | None:
         if not status.config.enabled:
             return SendOutcome(action="skipped_disabled", reason="主动消息已关闭")
         if status.paused:
-            if status.paused_until and utc_naive_to_local(status.paused_until) < local_now:
-                self._store.resume()
-                status = self._store.status()
-            else:
-                return SendOutcome(action="skipped_paused", reason="暂停中")
+            return SendOutcome(action="skipped_paused", reason="暂停中")
+        if _in_quiet(local_now, status.config):
+            return SendOutcome(action="skipped_quiet", reason="当前处于静默时段")
+        if status.last_activity_at and local_now < (
+            utc_naive_to_local(status.last_activity_at)
+            + timedelta(minutes=status.config.suppress_minutes)
+        ):
+            return SendOutcome(action="skipped_activity", reason="最近有会话活动")
+        return None
+
+    async def _tick(self, local_now: datetime | None = None) -> SendOutcome:
+        started = time.monotonic()
+        fixed_now = local_now
+        local_now = local_now or self._clock()
+
+        def current_time() -> datetime:
+            return (
+                fixed_now + timedelta(seconds=time.monotonic() - started)
+                if fixed_now is not None
+                else self._clock()
+            )
+
+        status = self._current_status(local_now)
+        if not status.config.enabled or status.paused:
+            return self._eligibility(status, local_now) or SendOutcome(action="not_due")
 
         if status.next_candidate_at is None:
             self._schedule_next(local_now)
@@ -158,18 +199,46 @@ class ProactiveService:
                 reason=f"候选已过期（>{grace} 分钟），重新调度且不补发",
             )
 
+        blocked = self._eligibility(status, local_now)
+        if blocked is not None:
+            self._schedule_next(local_now)
+            return blocked
+
+        def check_delivery() -> SendOutcome | None:
+            now = current_time()
+            current = self._current_status(now)
+            failure = self._eligibility(current, now)
+            if failure is not None:
+                return failure
+            if current.last_activity_at != status.last_activity_at:
+                return SendOutcome(action="skipped_activity", reason="生成期间出现了新会话活动")
+            if current.next_candidate_at != status.next_candidate_at:
+                return SendOutcome(action="not_due", reason="候选状态已更新")
+            if now > candidate_local + timedelta(minutes=current.config.skip_grace_minutes):
+                return SendOutcome(action="skipped_expired", reason="生成期间候选已过期")
+            return None
+
         message = await self._compose_message()
         if not message:
             self._schedule_next(local_now)
             return SendOutcome(action="skipped_expired", reason="消息生成失败，重新调度")
 
-        sent = await self._send_with_retries(message)
+        self._delivery_skip = None
+        sent = await self._send_with_retries(message, check_eligibility=check_delivery)
+        if self._delivery_skip is not None:
+            if self._delivery_skip.action in {
+                "skipped_activity",
+                "skipped_quiet",
+                "skipped_expired",
+            }:
+                self._schedule_next(current_time())
+            return self._delivery_skip
         if not sent:
             self._schedule_next(local_now)
             return SendOutcome(action="skipped_expired", reason="发送失败（有限重试后）")
 
-        self._store.mark_sent()
-        self._schedule_next(local_now)
+        self._store.mark_sent(local_naive_to_utc(current_time()))
+        self._schedule_next(current_time())
         return SendOutcome(action="sent", message=message)
 
     async def _compose_message(self) -> str | None:
@@ -181,7 +250,7 @@ class ProactiveService:
                 soul = (
                     self._personalities.get_character(character_id).card.data.system_prompt or soul
                 )
-            hits = self._memory.retrieve(
+            hits = await self._memory.aretrieve(
                 "主人 偏好 称呼 喜好 最近 纪念", limit=6, character_id=character_id
             )
             memory_lines = "\n".join(f"- {hit.content}" for hit in hits[:6]) or "（暂无长期记忆）"
@@ -204,15 +273,25 @@ class ProactiveService:
             logger.exception("主动消息生成失败")
             return None
 
-    async def _send_with_retries(self, message: str, max_attempts: int = 2) -> bool:
+    async def _send_with_retries(
+        self,
+        message: str,
+        max_attempts: int = 2,
+        *,
+        check_eligibility: Callable[[], SendOutcome | None] | None = None,
+    ) -> bool:
         owner_user_id = self._settings.qq_owner_ids[0] if self._settings.qq_owner_ids else None
         channel = self._settings.proactive_sender
         for attempt in range(1, max_attempts + 1):
+            if check_eligibility is not None:
+                self._delivery_skip = check_eligibility()
+                if self._delivery_skip is not None:
+                    return False
             try:
                 metadata: dict[str, object] = {"channel": channel, "attempt": attempt}
                 if owner_user_id is not None:
                     metadata["user_id"] = owner_user_id
-                if self._sender.send(message, metadata):
+                if await asyncio.to_thread(self._sender.send, message, metadata):
                     self._last_delivery_error = None
                     if self._audit:
                         self._audit.record(
@@ -230,8 +309,10 @@ class ProactiveService:
                         )
                     return True
             except Exception as exc:
-                self._last_delivery_error = str(exc)
-                logger.warning("主动消息发送失败 attempt=%s：%s", attempt, exc)
+                self._last_delivery_error = type(exc).__name__
+                logger.warning(
+                    "主动消息发送失败 attempt=%s error_type=%s", attempt, type(exc).__name__
+                )
             if attempt < max_attempts:
                 await asyncio.sleep(2 * attempt)
         if self._audit:

@@ -46,7 +46,9 @@ def test_approval_session_scope_creates_grant(engine: Engine) -> None:
     request = service.request(
         "file.create", "low_write", "session", '{"path":"/a"}', session_id="s1"
     )
-    resolution = service.resolve_once(request.code, session_id="s1", expected_scope="session")
+    resolution = service.resolve_once(
+        request.code, session_id="s1", expected_scope="session", grant_scope="session"
+    )
     assert resolution.ok
     assert service.has_session_grant("s1", "file.create")
     # 编号本身同样不可重放

@@ -24,6 +24,8 @@ def _in_quiet(local: datetime, config: ProactiveConfig) -> bool:
     start = parse_hhmm(config.quiet_start)
     end = parse_hhmm(config.quiet_end)
     current = local.time()
+    if start == end:
+        return False
     if start < end:
         return start <= current < end
     return current >= start or current < end

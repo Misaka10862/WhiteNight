@@ -94,21 +94,25 @@ class OllamaMemoryExtractor:
                 ]
             )
             text_parts: list[str] = []
+            completed = False
             async for chunk in chunks:
                 if chunk.delta:
                     text_parts.append(chunk.delta)
                 if chunk.done:
+                    completed = True
                     break
             raw = "".join(text_parts)
+            if not completed:
+                return ExtractionResult(succeeded=False)
             match = re.search(r"\{.*\}", raw, re.S)
             if not match:
-                logger.warning("记忆提取没有 JSON 输出：%s", raw[:200])
-                return ExtractionResult()
+                logger.warning("记忆提取没有 JSON 输出 chars=%s", len(raw))
+                return ExtractionResult(succeeded=False)
             payload = json.loads(match.group(0))
             return ExtractionResult.model_validate(payload)
         except Exception as exc:  # 记忆提取失败不阻塞聊天
-            logger.warning("记忆提取失败：%s", exc)
-            return ExtractionResult()
+            logger.warning("记忆提取失败 error_type=%s", type(exc).__name__)
+            return ExtractionResult(succeeded=False)
 
 
 class NullMemoryExtractor:

@@ -11,7 +11,7 @@ from sqlalchemy import Engine
 from whitenight.agent.service import ChatService, DummyProvider
 from whitenight.channels.types import ChatEvent, ChatRequest
 from whitenight.config import Settings
-from whitenight.delegates.base import DelegateUnavailableError
+from whitenight.delegates.base import DelegateCapabilities, DelegateUnavailableError
 from whitenight.delegates.events import DelegateEvent, DelegationRequest
 from whitenight.delegates.manager import DelegateManager, TaskStore
 from whitenight.routing.engine import RoutingEngine
@@ -21,6 +21,7 @@ from whitenight.storage.sessions import SessionStore
 
 class FakeCodex:
     name = "codex"
+    capabilities = DelegateCapabilities(read_only=True, action_policy=True)
 
     def __init__(self) -> None:
         self.last_request: DelegationRequest | None = None
@@ -100,11 +101,7 @@ def test_delegation_includes_recent_verified_qq_attachment(
     attachment = settings.data_dir / "qq_files" / "received-report.docx"
     attachment.parent.mkdir(parents=True)
     attachment.write_bytes(b"docx")
-    store.add_message(
-        session.id,
-        "user",
-        f"[QQ 文件] report.docx 已保存到 {attachment}",
-    )
+    store.record_attachment_message(session.id, "report.docx", channel="onebot", path=attachment)
 
     _collect(
         service.stream_reply(ChatRequest(session_id=session.id, text="/codex 处理我刚才发的文件"))

@@ -1,56 +1,53 @@
-# WhiteNight current status overview (as of 2026-08-15)
+# WhiteNight current status (2026-09-04)
 
-> For the detailed process, see [PROGRESS.md](PROGRESS.md); for actual measurements at each stage, see `docs/reports/`.
+This is the current acceptance summary. [PROGRESS.md](PROGRESS.md) records implementation and
+final verification evidence; dated reports in [reports/](reports/) remain historical evidence.
+A previous successful run or an old "in progress" entry does not certify the current build.
 
-## Conclusion
+## Implemented and covered by automated checks
 
-- Automable construction work has been completed: **Phases 0–8 are all implemented, Phase 9 offline tool chain is ready (training is suspended according to user decision),
-  Phase 10 Core Complete**.
-- Current running plan: **Temporary minimum verification** - native `qwen3:8b` text model + `SOUL.md` default personality;
-  The picture message gives a clear "picture cannot be viewed temporarily" prompt. The LoRA visual model is a subsequent formal solution.
-- Test baseline: **142 passed / 4 skipped**; ruff + mypy strict + front-end eslint/tsc/vite all green.
-- The real QQ link has been opened (NapCat code scanning + OneBot reporting/sending + owner whitelist + sending and receiving closed-loop actual test).
-- 72-hour continuous running inspection in progress (started by Agent, currently 0 failures).
+- Core chat has durable request identities, per-session serialization, cancellation, structured
+  attachment receipts, and correlated event envelopes. The WebUI keeps streams separate across
+  sessions and page changes, refreshes history after termination, and protects IME confirmation.
+- Approval scope is selected explicitly. A one-time approval does not create a session grant;
+  session grants remain limited to eligible low-risk operations. Tool arguments, channel identity,
+  parameters and approval consumption are checked before execution.
+- Task state records preserve uncertain outcomes and cancellation failures. Automatic replay of
+  work with unknown effects is refused; the dashboard only offers retries for failed read-only tasks.
+- Memory extraction and embedding maintenance have bounded background execution and persistent
+  progress/cache metadata. Lexical retrieval remains available when embeddings are unavailable.
+- Backups cover the database plus attachments, QQ files, character assets and stickers. SQLite and
+  SQLCipher paths are tested; restore uses an exclusive maintenance lock, retained generations and
+  a recoverable journal. The WebUI supports create, verify, preview and download; restore is offline.
+- The local gate runs Ruff, strict mypy, Python tests, frontend behavior tests, TypeScript/Vite,
+  tracked-secret checks and the technical-English audit. Dependency installation is a separate step.
+- The stability monitor records component health, service memory, task stalls and sampling gaps.
+  A short tool test is not a 72-hour acceptance result.
 
-## Key Competencies and Evidence
+## Current evidence boundaries
 
-| Ability | Evidence |
+| Item | Current status |
 |---|---|
-| Streaming chat + session recovery | WebSocket E2E, restart recovery actual test; qwen3:8b resident (keep_alive=-1), QQ closed-loop reply 4.5s |
-| Long-term memory | FTS5 + semantic mixed recall, conflict/edit/deletion, real Ollama extraction test; extraction limit 512 tokens, chat priority cancellation |
-| Document/OCR | PDF/DOCX/XLSX/PPTX/text/code/zip corpus analysis; Apple Vision OCR actual measurement |
-| Tools and Approval | Read-only automatic, low-risk session authorization, medium- and high-risk step-by-step approval, delete to trash, batch delete rejection |
-| Routing and Delegation | The golden routing set keeps ordinary work local; Codex MCP requires a leading `/codex`; Hermes delegation is opt-in and disabled by default |
-| WebUI | 10 pages, session/memory/task/approval/permission/model/log/active message available; model page can switch Ollama resident policy (effective immediately and persistent) |
-| Background service | launchd template, menu bar entry, Poisson active message, no reissue after expiration |
-| QQ | NapCat real deployment: QQ account login, OneBot reporting (8765) and sending (3000) configuration completed, `QQ LINK READY`, direct sending and event closed-loop measured delivery; poke the poke segment to identify and generate exclusive responses |
-| Backup and recovery | Encrypted backup verify/preview/restore actual test; automatic safe backup before recovery |
-| Security | Prompt injection/SSRF/approval replay/non-owner/attachment MIME/log desensitization red team coverage; generate mandatory `num_predict` upper limit to prevent loss of control and occupy inference slot |
+| Automated implementation checks | 332 Python tests passed, 4 optional integrations skipped; 13 frontend behavior tests passed; complete local gate passed |
+| Real browser interaction and narrow viewport | Isolated fixture acceptance completed; desktop/narrow screenshots and observed scenarios are recorded in the project-review report |
+| Full 72-hour run, sleep/wake and sustained network outage | Not completed for this revision; requires a new dated report |
+| Production backup/migration/restore drill | Isolated automated tests exist; no production data was restored during this review |
+| Real QQ delivery and proactive messages | Historical deployment evidence exists; no fresh external messages were sent for this review |
+| Codex delegation | Explicit `/codex`, newly created read-only sandbox tasks only; real current-version task validation remains separate |
+| Codex write delegation | Refused because a tested per-action WhiteNight policy bridge is unavailable |
+| Hermes delegation | Disabled by default; endpoint/authentication and per-action capability validation remain incomplete |
+| LoRA training and blind test | Intentionally paused; prompt-based character/persona support remains available |
+| GitHub Actions | Intentionally disabled since 2026-08-22; restoring hosted automation requires a project decision |
 
-## Still needs to be completed by the user (blocking point)
+## Historical evidence
 
-1. **Run for 72 hours**: Agent has started `scripts/run_72h.py --hours 72` and is in progress;
-   During operation, if there is a sleep wake-up/network interruption, it will be automatically recorded, and the user does not need to perform any additional operations.
-2. **Visual regression**: Open WebUI on this machine for manual confirmation (desktop/narrow window screenshots have been generated by headless).
-3. **Hermes**: delegation is intentionally disabled by default; enable and authenticate it only for a future validation run.
-4. **Codex real task**: MCP handshake has passed; user confirmation is required whether to consume cloud quota to run a short task.
-5. **LoRA**: On hold; GPU rental plan and blind test process tools are ready.
-6. **Send active messages to QQ**: The local runtime is configured with
-   `proactive_sender: qq`; the target is the first `owner_ids`. The Dashboard Active page shows
-   OneBot reachability and records only minimal delivery metadata.
+The 2026-08-15 phase reports describe the then-current local model, real QQ link, backup drills,
+and the start of an earlier stability inspection. Later August/September progress entries describe
+Provider, visual-input, attachment and sticker repairs. These records must retain their dates;
+none establishes that an old monitor is still running or that the present runtime uses that model.
 
-## Key commands to resume operation
+## Delivery status
 
-```bash
-uv run whitenight # Start service (automatic migration)
-cd apps/web && npm run dev                # WebUI
-./scripts/check.sh # Full check
-uv run scripts/diagnostics.py --json # Diagnosis
-uv run scripts/backup.py backup --output data/backups/whitenight.bak
-uv run scripts/qq_link_check.py # QQ link readiness check
-```
-
-## Git
-
-- Local main and `origin/main` are synchronized (the last push was successful).
-- Each round of work is submitted, and the tag `phase-0` has been set; tags can be added by stage when publishing.
+The user authorized one final commit and push after verification. Git history and remote revision
+comparison provide the delivery identifier; operational release acceptance remains separate.
+Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the remaining acceptance gates.

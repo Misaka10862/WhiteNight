@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createSession, fetchCharacters, fetchSessions, fetchStatus } from './api'
+import { cancelChat, chatWebSocketUrl, createSession, fetchCharacters, fetchSessions, fetchStatus } from './api'
+import { ChatController, type SocketLike } from './chatController'
 import ChatPage, { SessionsPage } from './pages/ChatPage'
 import MemoryPage from './pages/MemoryPage'
 import TasksPage from './pages/TasksPage'
@@ -9,7 +10,7 @@ import PermissionsPage from './pages/PermissionsPage'
 import ModelsPage from './pages/ModelsPage'
 import ProactivePage from './pages/ProactivePage'
 import LogsPage from './pages/LogsPage'
-import PlaceholderPage from './pages/PlaceholderPage'
+import BackupPage from './pages/BackupPage'
 import CharactersPage from './pages/CharactersPage'
 
 type Tab = 'chat' | 'sessions' | 'characters' | 'memory' | 'tasks' | 'approvals' | 'permissions' | 'models' | 'active' | 'logs' | 'backup'
@@ -33,6 +34,19 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('chat')
   const [activeId, setActiveId] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(false)
+  const [chatController] = useState(() => new ChatController({
+    socket: () => new WebSocket(chatWebSocketUrl()) as unknown as SocketLike,
+    requestId: () => crypto.randomUUID(),
+    cancel: cancelChat,
+    refresh: async (sessionId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['messages', sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+        queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['approvals'] }),
+      ])
+    },
+  }))
 
   const status = useQuery({ queryKey: ['status'], queryFn: fetchStatus })
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
@@ -40,6 +54,7 @@ export default function App() {
   const newSession = useMutation({
     mutationFn: (payload?: { character_id?: string; greeting_index?: number }) => createSession(payload),
     onSuccess: (session) => {
+      queryClient.setQueryData(['sessions'], (previous: typeof sessions.data) => [session, ...(previous ?? []).filter(item => item.id !== session.id)])
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
       setActiveId(session.id)
       setTab('chat')
@@ -48,12 +63,12 @@ export default function App() {
 
   // 首次进入：恢复最近会话；没有则静默新建。
   useEffect(() => {
-    if (activeId !== null || !sessions.data || sessions.data.length === 0) return
-    setActiveId(sessions.data[0].id)
+    if (!sessions.data || (activeId !== null && sessions.data.some(session => session.id === activeId))) return
+    setActiveId(sessions.data[0]?.id ?? null)
   }, [activeId, sessions.data])
 
   useEffect(() => {
-    if (activeId !== null || !sessions.data || sessions.data.length !== 0 || newSession.isPending) return
+    if (activeId !== null || !sessions.data || sessions.data.length !== 0 || newSession.isPending || newSession.isError) return
     newSession.mutate(undefined)
   }, [activeId, sessions.data, newSession])
 
@@ -91,10 +106,12 @@ export default function App() {
         </nav>
 
         <div className="content" role="main">
+          {(sessions.isError || newSession.isError) && <div className="chat-error" role="alert">{String(sessions.error ?? newSession.error)}</div>}
           {tab === 'chat' && (
             <ChatPage
               sessions={sessions.data ?? []}
               activeId={activeId}
+              controller={chatController}
               onSelectSession={(id) => setActiveId(id)}
               characters={characters.data ?? []}
               onNewSession={(characterId, greetingIndex) => newSession.mutate({
@@ -121,9 +138,7 @@ export default function App() {
           {tab === 'models' && <ModelsPage />}
           {tab === 'active' && <ProactivePage />}
           {tab === 'logs' && <LogsPage />}
-          {tab === 'backup' && (
-            <PlaceholderPage title="备份与恢复" description="加密全量/增量备份与恢复演练在阶段 10 接入。" />
-          )}
+          {tab === 'backup' && <BackupPage />}
         </div>
       </div>
     </main>

@@ -1,4 +1,4 @@
-#WhiteNight Development Environment
+# WhiteNight development environment
 
 This document is one of the exit conditions for phase 0: the new environment can start the shell service according to this document, and the front-end and back-end inspection, testing and construction all pass.
 
@@ -17,8 +17,8 @@ brew install uv
 # Install and lock Python 3.12 (preferred version for build plans)
 uv python install 3.12
 
-# Synchronize dependencies and generate uv.lock (enabled by default in dev group)
-uv sync --dev
+# Install the recorded dependency set; dependency updates are a separate reviewed change
+uv sync --locked --dev --extra sqlcipher
 ```
 
 If `brew install uv` downloads slowly, you can use the official installer instead:
@@ -51,18 +51,22 @@ WHITENIGHT_PORT=9000 uv run whitenight # Environment variable override YAML
 Do not submit real keys in `.env` or YAML for production. Database master key storage rules:
 
 - Production: macOS Keychain, `service=com.whitenight.credentials`, `account=database-master-key`;
-- Emergency/CI: `WHITENIGHT_DATABASE_KEY` environment variable (used within the process, disk placement and logging are prohibited).
+- Tests: isolated temporary databases and synthetic in-memory credentials; production keys are never copied into test fixtures, shell history or configuration.
 
 ### SQLCipher (optional, production database)
 
 ```bash
 uv sync --extra sqlcipher
 uv run python - <<'PY'
+from getpass import getpass
 from whitenight.credentials.keychain import MacOSKeychain
 from whitenight.config import load_settings
 s = load_settings()
-MacOSKeychain().set(s.keychain_service, "database-master-key", "<independent recovery key>")
-print("Written to Keychain; please save the recovery key to offline media at the same time")
+key = getpass("Database master key: ")
+if not key:
+    raise SystemExit("A database key is required")
+MacOSKeychain().set(s.keychain_service, "database-master-key", key)
+print("Database key stored in Keychain")
 PY
 ```
 
@@ -78,13 +82,13 @@ Valid only on macOS; document parsing returns clear errors for images when not i
 
 ## 2. Front-end: React + Vite
 
-Requires Node.js 20+ (development machine is Node 26 with Homebrew).
+The installed Vite 7 requires Node.js 20.19+ on the Node 20 line, or Node.js 22.12+ (the development machine uses Node 26).
 
 ```bash
 cd apps/web
-npm install # Generate package-lock.json
+npm install # Install the existing locked dependency set
 npm run dev # http://127.0.0.1:5173, /api and /ws proxy to 8765
-npm run check        # eslint + tsc + vite build
+npm run check        # eslint + node:test behavior checks + tsc + vite build
 ```
 
 For a persistent local development service, install the user-level launchd job:
@@ -100,13 +104,13 @@ For a persistent local development service, install the user-level launchd job:
 ./scripts/check.sh
 ```
 
-The script sequentially executes back-end ruff, pytest and front-end `npm run check`. If any step fails, it will exit non-zero.
+The script runs Ruff checks, strict mypy, the tracked-secret scan, pytest, frontend behavior/static/build checks and the technical-English audit. It exits non-zero on failure and does not install dependencies. Install the locked environment separately before running it.
 
 ## 4. Local verification
 
 GitHub Actions is disabled for this repository. The previous workflow did not start because the
 GitHub account was locked by a billing issue; no backend, web, or secret-scan step executed. Run
-`./scripts/check.sh` before every push. It covers backend lint/tests, frontend lint/build, a
+`./scripts/check.sh` before every push. It covers backend lint/type/tests, frontend behavior/lint/build, a
 tracked-file credential scan, and the technical-English audit without downloading models or
 reading credential stores.
 
@@ -124,3 +128,24 @@ reading credential stores.
 - Repository Actions permission: disabled by project decision on 2026-08-22.
 - Local verification remains mandatory through `./scripts/check.sh`.
 - Re-enabling hosted automation requires an explicit project decision and a resolved GitHub billing state.
+
+## 7. Repeatable browser acceptance
+
+Use `scripts/browser_fixture.py` to create a disposable SQLite database and deterministic slow
+Provider. It disables QQ, proactive messages and Hermes, uses synthetic in-memory credentials, and
+binds the API to port 8769. Production ports 8765/5173 are not used for this acceptance fixture.
+
+```bash
+.venv/bin/python scripts/browser_fixture.py
+# In another terminal:
+WHITENIGHT_API_URL=http://127.0.0.1:8769 npm --prefix apps/web run dev -- --host 127.0.0.1 --port 5179 --strictPort
+```
+
+Open `http://127.0.0.1:5179` in the test browser. The fixture seeds A/B sessions and two safe
+approval records. Check one-time versus session grants, changing sessions/pages during generation,
+stopping a reply, provider failure, document upload, backup creation/verification/preview, and a
+narrow viewport. IME confirmation is covered by a deterministic client test; record a real input-method
+check separately when available. Stop only the fixture processes after acceptance; temporary data is retained.
+No new frontend test dependencies are required: node:test reuses the existing TypeScript compiler.
+
+Maintenance and recovery architecture is documented in ADR-0005 and `docs/OPERATIONS.md`.

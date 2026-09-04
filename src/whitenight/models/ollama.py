@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from whitenight.models.base import (
+    ModelCapabilities,
     ModelChunk,
     ModelProviderError,
     ProviderMessage,
@@ -40,6 +41,10 @@ class OllamaProvider:
         self.keep_alive = keep_alive
         self.timeout = httpx.Timeout(timeout_s, connect=10.0)
         self._transport = transport
+
+    @property
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(tools=True, vision=self.supports_vision)
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(

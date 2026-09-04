@@ -23,7 +23,10 @@ class StorageConfigurationError(RuntimeError):
 
 
 def backend_of(database_url: str) -> Backend:
-    return "sqlcipher" if make_url(database_url).get_backend_name() == "sqlcipher" else "sqlite"
+    backend = make_url(database_url).get_backend_name()
+    if backend not in ("sqlite", "sqlcipher"):
+        raise StorageConfigurationError(f"不支持的数据库 backend：{backend}")
+    return "sqlcipher" if backend == "sqlcipher" else "sqlite"
 
 
 def _ensure_sqlite_dir(database_url: str) -> None:

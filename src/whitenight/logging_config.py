@@ -10,6 +10,7 @@ import json
 import logging
 import logging.config
 import re
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ _SECRET_PATTERN = re.compile(
 
 def redact(text: str) -> str:
     """把敏感赋值右侧替换为 ``***``，保留键名便于排查。"""
+    text = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "***", text)
     return _SECRET_PATTERN.sub(r"\1***", text)
 
 
@@ -31,13 +33,17 @@ class RedactingFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if isinstance(record.msg, str):
-                record.msg = redact(record.msg)
-            if record.args:
-                redacted_args = tuple(
-                    redact(arg) if isinstance(arg, str) else arg for arg in record.args
+            record.msg = redact(record.getMessage())
+            record.args = ()
+            if record.exc_info:
+                error_type, _value, tb = record.exc_info
+                # Keep diagnostic locations, never exception bodies or source lines.
+                frames = traceback.extract_tb(tb)
+                locations = " -> ".join(
+                    f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in frames
                 )
-                record.args = redacted_args
+                record.exc_text = f"{error_type.__name__ if error_type else 'Error'} [{locations}]"
+                record.exc_info = None
         except Exception:  # 脱敏失败不应中断业务日志
             pass
         return True
@@ -53,8 +59,8 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact(record.getMessage()),
         }
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+        if record.exc_text:
+            payload["exc"] = record.exc_text
         return json.dumps(payload, ensure_ascii=False)
 
 

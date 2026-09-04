@@ -6,13 +6,16 @@ SQLCipher 主密钥按 storage.engine.resolve_database_key 的同一规则解析
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from logging.config import fileConfig
 
 from alembic import context
 
 from whitenight.config import load_settings
+from whitenight.memory import models as _memory_models  # noqa: F401
 from whitenight.storage import Base
 from whitenight.storage.engine import build_engine, resolve_database_key
+from whitenight.storage.maintenance import MaintenanceLock
 
 config = context.config
 
@@ -42,15 +45,30 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """在线模式：按 URL 选择 sqlite3 或 sqlcipher3 驱动。"""
-    engine = build_engine(settings.database_url, key=resolve_database_key(settings.database_url))
+    # Direct Alembic commands must obey the same maintenance boundary as startup.
+    from whitenight.storage.backup import recover_interrupted_restore
+    from whitenight.storage.migrate import _backup_before_upgrade
 
-    with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+    ready = config.attributes.get("whitenight_maintenance_ready", False)
+    lock_context = nullcontext() if ready else MaintenanceLock(settings)
+    with lock_context as lock:
+        if lock is not None:
+            recover_interrupted_restore(settings, maintenance_lock=lock)
+            _backup_before_upgrade(settings, config, force=True)
+        engine = build_engine(
+            settings.database_url,
+            key=resolve_database_key(
+                settings.database_url, settings.keychain_backend, settings.keychain_service
+            ),
+        )
+        try:
+            with engine.connect() as connection:
+                context.configure(connection=connection, target_metadata=target_metadata)
 
-        with context.begin_transaction():
-            context.run_migrations()
-
-    engine.dispose()
+                with context.begin_transaction():
+                    context.run_migrations()
+        finally:
+            engine.dispose()
 
 
 if context.is_offline_mode():

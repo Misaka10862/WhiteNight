@@ -13,12 +13,13 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from whitenight.delegates.base import DelegateError, DelegateUnavailableError
+from whitenight.delegates.base import DelegateCapabilities, DelegateError, DelegateUnavailableError
 from whitenight.delegates.events import DelegateEvent, DelegationRequest
 
 
 class HermesGatewayAdapter:
     name = "hermes"
+    capabilities = DelegateCapabilities()
 
     def __init__(self, base_url: str = "http://127.0.0.1:9119", timeout_s: float = 30.0) -> None:
         self.base_url = base_url.rstrip("/")

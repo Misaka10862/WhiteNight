@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable
 import httpx
 
 from whitenight.models.base import (
+    ModelCapabilities,
     ModelChunk,
     ModelProviderError,
     ProviderMessage,
@@ -102,6 +103,10 @@ class OpenAIProvider:
             return True
         return None
 
+    @property
+    def capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(tools=True, vision=self.supports_vision)
+
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             base_url=self.base_url, timeout=self.timeout, trust_env=False, transport=self._transport
@@ -179,10 +184,7 @@ class OpenAIProvider:
             client.stream("POST", "/chat/completions", headers=headers, json=payload) as response,
         ):
             if response.status_code >= 400:
-                body = (await response.aread()).decode("utf-8", errors="replace")
-                raise ModelProviderError(
-                    f"OpenAI-compatible API 返回 {response.status_code}: {body[:500]}"
-                )
+                raise ModelProviderError.http_failure(response.status_code)
             calls: dict[int, dict[str, str]] = {}
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):

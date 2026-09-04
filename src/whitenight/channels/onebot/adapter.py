@@ -34,6 +34,8 @@ from whitenight.storage.sessions import SessionStore
 
 logger = logging.getLogger(__name__)
 
+MAX_QQ_FILE_BYTES = 16 * 1024 * 1024
+
 _APPROVE_RE = re.compile(r"^(?:同意|批准|允许)\s+([A-Za-z0-9_-]{6,16})$")
 _REJECT_RE = re.compile(r"^(?:拒绝|不同意)\s+([A-Za-z0-9_-]{6,16})$")
 _APPROVAL_WITHOUT_CODE_RE = re.compile(r"^(?:同意|批准|允许|允许操作)[！!。.]?$")
@@ -152,12 +154,12 @@ class OneBotAdapter:
     async def _process_owner_message(self, event: OneBotPrivateMessageEvent) -> dict[str, object]:
         parsed = parse_segments(event)
         logger.info(
-            "QQ 私聊处理 user_id=%s message_id=%s segments=%s poke=%s text=%r",
+            "QQ 私聊处理 user_id=%s message_id=%s segments=%s poke=%s text_length=%s",
             event.user_id,
             event.message_id,
             parsed.segments,
             parsed.is_poke,
-            parsed.text[:50],
+            len(parsed.text),
         )
 
         if parsed.empty:
@@ -222,16 +224,21 @@ class OneBotAdapter:
                 parsed.file_id,
             )
             if saved:
-                self._sessions.add_message(
-                    session_id,
-                    "user",
-                    f"[QQ 文件] {saved['name']} 已保存到 {saved['path']}",
-                    kind="text",
+                self._sessions.record_attachment_message(
+                    session_id, saved["name"], channel="onebot", path=Path(saved["path"])
                 )
                 await self._send(event.user_id, f"收到文件：{saved['name']}（{saved['path']}）")
             else:
-                await self._send(event.user_id, "文件下载失败，请稍后重试")
-            return {"status": "file_received"}
+                reason = self._file_receive_failure_reason(parsed)
+                self._sessions.record_attachment_message(
+                    session_id,
+                    Path(parsed.file_name or "文件").name,
+                    channel="onebot",
+                    error=reason,
+                )
+                await self._send(event.user_id, reason)
+                return {"status": "file_failed", "session_id": session_id}
+            return {"status": "file_received", "session_id": session_id}
 
         image_data_url = await self._resolve_image_data_url(parsed)
         if (parsed.image_data_url or parsed.image_file_id) and image_data_url is None:
@@ -303,14 +310,32 @@ class OneBotAdapter:
             logger.warning("QQ 表情发送跳过：目录中没有 sticker_id=%s", sticker_id)
             return
         try:
-            assert record.emoji_id is not None
-            self._sender.send_private_mface(
-                user_id,
-                segment_type=record.segment_type,
-                emoji_id=record.emoji_id,
-                emoji_package_id=record.emoji_package_id,
-                key=record.key,
-            )
+            if record.segment_type == "image":
+                native_url = record.native_url
+                if not native_url:
+                    raise ValueError("QQ 自定义动画表情缺少 native_url")
+                send_sticker = getattr(self._sender, "send_private_sticker", None)
+                if not callable(send_sticker):
+                    raise ValueError("OneBotSender 不支持 QQ 自定义动画表情")
+                await asyncio.to_thread(
+                    send_sticker,
+                    user_id,
+                    segment_type="image",
+                    sub_type=record.sub_type,
+                    url=native_url,
+                    summary="[动画表情]",
+                )
+            else:
+                if record.emoji_id is None:
+                    raise ValueError("QQ 商城表情缺少 emoji_id")
+                await asyncio.to_thread(
+                    self._sender.send_private_mface,
+                    user_id,
+                    segment_type=record.segment_type,
+                    emoji_id=record.emoji_id,
+                    emoji_package_id=record.emoji_package_id,
+                    key=record.key,
+                )
             self._audit_sticker("channel.sticker.delivered", "auto", sticker_id, user_id)
             logger.info("QQ 表情发送成功 user=%s sticker_id=%s", user_id, sticker_id)
         except Exception:
@@ -440,7 +465,12 @@ class OneBotAdapter:
                 )
                 return {"status": "approval_failed"}
             resolution = self._approvals.resolve_once(
-                code, session_id=item.session_id, expected_scope=item.scope
+                code,
+                session_id=item.session_id,
+                expected_scope=item.scope,
+                grant_scope="once",
+                channel="onebot",
+                channel_target=str(event.user_id),
             )
             await self._send(
                 event.user_id,
@@ -468,13 +498,12 @@ class OneBotAdapter:
 
     async def _send(self, user_id: int, text: str) -> None:
         try:
-            self._sender.send_private_message(user_id, text)
+            await asyncio.to_thread(self._sender.send_private_message, user_id, text)
         except Exception as exc:
             logger.error(
-                "QQ 回复发送失败 user=%s error_type=%s error=%s",
+                "QQ 回复发送失败 user=%s error_type=%s",
                 user_id,
                 type(exc).__name__,
-                str(exc)[:300],
                 exc_info=True,
             )
 
@@ -492,7 +521,7 @@ class OneBotAdapter:
         resolved_source = source
         if not self._is_usable_file_source(resolved_source) and file_id:
             try:
-                metadata = self._sender.get_file(file_id)
+                metadata = await asyncio.to_thread(self._sender.get_file, file_id)
                 resolved_source = self._file_source_from_metadata(metadata) or ""
                 resolved_name = metadata.get("file_name") or metadata.get("name")
                 if isinstance(resolved_name, str) and resolved_name:
@@ -514,19 +543,41 @@ class OneBotAdapter:
             except (ValueError, binascii.Error):
                 logger.warning("QQ 文件 base64 内容无效 file_id=%s", file_id)
                 return None
-            if len(content) > 16 * 1024 * 1024:
+            if len(content) > MAX_QQ_FILE_BYTES:
                 logger.warning("QQ 文件超过接收大小限制 file_id=%s", file_id)
                 return None
             target.write_bytes(content)
         elif Path(resolved_source).is_file() and not Path(resolved_source).is_symlink():
             source_path = Path(resolved_source)
-            if source_path.stat().st_size > 16 * 1024 * 1024:
+            if source_path.stat().st_size > MAX_QQ_FILE_BYTES:
                 logger.warning("QQ 文件超过接收大小限制 path=%s", source_path)
                 return None
             target.write_bytes(source_path.read_bytes())
         else:
             return None
         return {"name": safe_name, "path": str(target)}
+
+    @staticmethod
+    def _file_receive_failure_reason(parsed: object) -> str:
+        raw_name = getattr(parsed, "file_name", None) or "文件"
+        file_name = Path(raw_name).name if isinstance(raw_name, str) else "文件"
+        declared_size = getattr(parsed, "file_size", None)
+        source = getattr(parsed, "file_path", None)
+        actual_size: int | None = None
+        if isinstance(source, str):
+            try:
+                path = Path(source)
+                if path.is_file() and not path.is_symlink():
+                    actual_size = path.stat().st_size
+            except OSError:
+                pass
+        size = actual_size if actual_size is not None else declared_size
+        if isinstance(size, int) and size > MAX_QQ_FILE_BYTES:
+            return (
+                f"文件接收失败：{file_name} 超过当前 {MAX_QQ_FILE_BYTES // (1024 * 1024)} MiB 限制，"
+                "请压缩后或分卷重新发送。"
+            )
+        return "文件下载失败，请稍后重试"
 
     @staticmethod
     def _is_usable_file_source(source: str) -> bool:

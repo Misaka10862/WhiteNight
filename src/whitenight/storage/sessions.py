@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session as OrmSession
 
 from whitenight.channels.types import MessageKind, MessageRecord, MessageRole, SessionSummary
 from whitenight.storage.models import AppMeta, CharacterProfile, Message, Session
+from whitenight.storage.receipts import AttachmentStore
 
 
 class SessionNotFoundError(KeyError):
@@ -23,6 +24,9 @@ class SessionStore:
     def __init__(self, engine: Engine, attachments_dir: Path | None = None) -> None:
         self._engine = engine
         self._attachments_dir = attachments_dir
+        self.attachments = AttachmentStore(
+            engine, attachments_dir.parent if attachments_dir is not None else None
+        )
 
     def _orm(self) -> OrmSession:
         return OrmSession(self._engine, expire_on_commit=False)
@@ -96,41 +100,57 @@ class SessionStore:
         kind: MessageKind = "text",
         image_path: str | None = None,
         image_mime: str | None = None,
+        attachment_ids: list[str] | None = None,
     ) -> MessageRecord:
         with self._orm() as orm:
-            session = orm.get(Session, session_id)
-            if session is None:
-                raise SessionNotFoundError(session_id)
-            sequence = (
-                orm.scalar(
-                    select(func.max(Message.sequence)).where(Message.session_id == session_id)
-                )
-                or 0
-            ) + 1
-            had_user = bool(
-                orm.scalar(
-                    select(func.count(Message.id)).where(
-                        Message.session_id == session_id,
-                        Message.role == "user",
-                    )
-                )
+            message = self._insert_message(
+                orm, session_id, role, content, kind, image_path, image_mime
             )
-            message = Message(
-                session_id=session_id,
-                sequence=sequence,
-                role=role,
-                kind=kind,
-                content=content,
-                image_path=image_path,
-                image_mime=image_mime,
-            )
-            orm.add(message)
-            # 角色开场可能占 sequence=1；标题仍取首条用户消息。
-            if role == "user" and not had_user and session.title == "新会话":
-                session.title = (content.strip() or "图片消息")[:24] or "新会话"
-            session.updated_at = datetime.now(UTC)
+            if attachment_ids:
+                self.attachments.bind(attachment_ids, session_id, message.id, transaction=orm)
             orm.commit()
             return self._record(message)
+
+    def _insert_message(
+        self,
+        orm: OrmSession,
+        session_id: str,
+        role: MessageRole,
+        content: str,
+        kind: MessageKind = "text",
+        image_path: str | None = None,
+        image_mime: str | None = None,
+    ) -> Message:
+        session = orm.get(Session, session_id)
+        if session is None:
+            raise SessionNotFoundError(session_id)
+        sequence = (
+            orm.scalar(select(func.max(Message.sequence)).where(Message.session_id == session_id))
+            or 0
+        ) + 1
+        had_user = bool(
+            orm.scalar(
+                select(func.count(Message.id)).where(
+                    Message.session_id == session_id, Message.role == "user"
+                )
+            )
+        )
+        message = Message(
+            session_id=session_id,
+            sequence=sequence,
+            role=role,
+            kind=kind,
+            content=content,
+            image_path=image_path,
+            image_mime=image_mime,
+        )
+        orm.add(message)
+        # Greeting messages do not consume the first-user title update.
+        if role == "user" and not had_user and session.title == "新会话":
+            session.title = (content.strip() or "图片消息")[:24] or "新会话"
+        session.updated_at = datetime.now(UTC)
+        orm.flush()
+        return message
 
     def rename_session(self, session_id: str, title: str) -> SessionSummary:
         with self._orm() as orm:
@@ -144,6 +164,30 @@ class SessionStore:
                 select(func.count(Message.id)).where(Message.session_id == session_id)
             )
             return self._summary(session, count or 0, orm)
+
+    def record_attachment_message(
+        self,
+        session_id: str,
+        name: str,
+        *,
+        channel: str,
+        path: Path | None = None,
+        error: str | None = None,
+    ) -> MessageRecord:
+        content = f"[附件] {name}" if path else f"[附件接收失败] {name}：{error}"
+        with self._orm() as orm:
+            message = self._insert_message(orm, session_id, "user", content, kind="file")
+            self.attachments.record(
+                session_id,
+                name,
+                channel=channel,
+                path=path,
+                source_message_id=message.id,
+                error=error,
+                transaction=orm,
+            )
+            orm.commit()
+            return self._record(message)
 
     def delete_session(self, session_id: str) -> None:
         """删除会话：级联删除消息，立即从应用移除。正文不进入审计。"""
@@ -234,4 +278,5 @@ class SessionStore:
             content=message.content,
             image_data_url=image_data_url,
             created_at=message.created_at,
+            attachments=self.attachments.for_message(message.id, message.session_id),
         )

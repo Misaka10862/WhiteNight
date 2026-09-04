@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
 
-from whitenight.delegates.base import DelegateError, DelegateUnavailableError
+from whitenight.delegates.base import DelegateCapabilities, DelegateError, DelegateUnavailableError
 from whitenight.delegates.events import DelegateEvent, DelegationRequest
 from whitenight.policy.approvals import ApprovalService
 
@@ -151,10 +151,14 @@ class _LiveApproval:
     session_id: str
     connection: ClientConnection
     send_lock: asyncio.Lock
+    params: dict[str, Any] | None = None
+    channel: str | None = None
+    channel_target: str | None = None
 
 
 class ManagedHermesGatewayAdapter:
     name = "hermes"
+    capabilities = DelegateCapabilities()
 
     def __init__(
         self,
@@ -247,7 +251,15 @@ class ManagedHermesGatewayAdapter:
             return False
         item = pending[0]
         resolution = (
-            self.approvals.resolve_once(code, session_id=item.session_id, expected_scope="once")
+            self.approvals.resolve_once(
+                code,
+                session_id=item.session_id,
+                expected_scope="once",
+                tool_name="delegate.hermes.action",
+                params=live.params,
+                channel=live.channel,
+                channel_target=live.channel_target,
+            )
             if allow
             else self.approvals.reject(code)
         )
@@ -275,7 +287,8 @@ class ManagedHermesGatewayAdapter:
             {"session_id": live.session_id},
             f"abort-{task_id}",
         )
-        return True
+        # The RPC request is not a verified acknowledgement that execution stopped.
+        return False
 
     async def close(self) -> None:
         await self.manager.stop()
@@ -362,9 +375,17 @@ class ManagedHermesGatewayAdapter:
                         if request.metadata.get("channel")
                         else None
                     ),
+                    channel_target=request.metadata.get("channel_target"),
+                    params=body,
                 )
                 self._approvals[approval.code] = _LiveApproval(
-                    request.task_id, session_id, websocket, send_lock
+                    request.task_id,
+                    session_id,
+                    websocket,
+                    send_lock,
+                    params=body,
+                    channel=request.metadata.get("channel"),
+                    channel_target=request.metadata.get("channel_target"),
                 )
                 yield DelegateEvent(
                     task_id=request.task_id,

@@ -30,8 +30,12 @@ def test_session_rename_export_delete(client: TestClient) -> None:
 
 def test_approvals_list_approve_reject(client: TestClient) -> None:
     service: ApprovalService = client.app.state.approvals
-    one = service.request("file.write", "medium", "once", '{"path":"/a"}', session_id="s1")
-    two = service.request("file.create", "low_write", "session", '{"path":"/b"}', session_id="s1")
+    one = service.request(
+        "file.write", "medium", "once", '{"path":"/a"}', session_id="s1", channel="web"
+    )
+    two = service.request(
+        "file.create", "low_write", "session", '{"path":"/b"}', session_id="s1", channel="web"
+    )
 
     pending = client.get("/api/v1/approvals/pending").json()
     assert {item["code"] for item in pending} == {one.code, two.code}
@@ -52,14 +56,20 @@ def test_policy_rules_and_grants_revoke(client: TestClient) -> None:
 
     service: ApprovalService = client.app.state.approvals
     request = service.request(
-        "file.create", "low_write", "session", '{"path":"/x"}', session_id="s1"
+        "file.create", "low_write", "session", '{"path":"/x"}', session_id="s1", channel="web"
     )
-    assert service.resolve_once(request.code, session_id="s1", expected_scope="session").ok
+    assert service.resolve_once(
+        request.code,
+        session_id="s1",
+        expected_scope="session",
+        grant_scope="session",
+        channel="web",
+    ).ok
     grants = client.get("/api/v1/policy/grants").json()
     assert grants and grants[0]["tool_name"] == "file.create"
 
     assert client.delete(f"/api/v1/policy/grants/{grants[0]['id']}").status_code == 204
-    assert not service.has_session_grant("s1", "file.create")
+    assert not service.has_session_grant("s1", "file.create", channel="web")
 
 
 def test_constraints_file_api_removed(client: TestClient) -> None:

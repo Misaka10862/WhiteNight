@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     host: str = "127.0.0.1"  # 首版强制本机监听，见 ADR-0002
     port: int = 8765
+    web_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:8765",
+            "http://localhost:8765",
+        ]
+    )
     log_level: str = "INFO"
     log_json: bool = False
     data_dir: Path = Field(default=Path("data"))
@@ -59,6 +67,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     context_budget_chars: int = 12_000
     max_image_bytes: int = 8 * 1024 * 1024  # 8 MiB
+    max_file_bytes: int = 16 * 1024 * 1024
     soul_file: Path = Field(default=Path("SOUL.md"))
     auto_migrate: bool = True
     memory_extractor: Literal["ollama", "rules", "none"] = "ollama"

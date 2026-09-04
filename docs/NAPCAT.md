@@ -76,20 +76,22 @@ uv run scripts/import_stickers.py /absolute/path/sticker-sheet.png
 ```
 
 The generated PNGs and `catalog.json` live in `data/stickers/`. The PNGs are only source/reference
-assets; to send a real QQ animated face, fill each record's `segment_type`, `emoji_id`, and either
-`emoji_package_id` or NapCat `key` with identifiers obtained after registering/importing the asset
-in QQ/NapCat. Records without native identifiers are disabled for sending rather than downgraded
-to an image. Edit `label`, `use_when`, `avoid_when`, and `enabled` directly, then restart WhiteNight.
+assets. Personal QQ custom faces are sent through NapCat as an `image` segment with
+`sub_type: 1` and the URL returned by `fetch_custom_face_detail`; NapCat renders that segment as
+the QQ animated-face marker, not a regular image. Marketplace faces still use the `mface` segment with `emoji_id` and
+`emoji_package_id`/`key`. Records without native metadata are disabled for sending rather than
+downgraded to an image. Edit `label`, `use_when`, `avoid_when`, and `enabled` directly, then
+restart WhiteNight.
 The model sees only text hints and does not invoke image understanding to choose a sticker. At most
 one native sticker is sent per turn, after the text.
 
-Binding workflow:
+Binding workflow (personal custom faces):
 
 1. Add each PNG to the QQ custom-emoji collection manually.
-2. Send each registered emoji once through the configured OneBot event route.
-3. Copy the received `mface` or `market_face` fields (`emoji_id`, `emoji_package_id`, and/or `key`)
-   into the matching catalog record.
-4. Restart WhiteNight and confirm the Model page reports a non-zero native-sticker count.
+2. Send each registered emoji once in a group visible to the NapCat account.
+3. Run `uv run scripts/sync_qq_stickers.py`. It reads the account's saved-face list, matches the
+   QQ remarks to local `sticker-*.png` files, and writes native delivery URLs into the catalog.
+4. Restart WhiteNight and confirm the OneBot status reports 18 native stickers.
 
 Example native binding:
 
@@ -101,9 +103,8 @@ Example native binding:
   "use_when": ["happy", "playful"],
   "avoid_when": ["serious"],
   "enabled": true,
-  "segment_type": "mface",
-  "emoji_id": "<QQ/NapCat emoji id>",
-  "emoji_package_id": "<package id>",
-  "key": null
+  "segment_type": "image",
+  "sub_type": 1,
+  "native_url": "https://p.qpic.cn/qq_expression/<uin>/<res-id>/0"
 }
 ```

@@ -16,7 +16,7 @@ class StickerSendParams(ToolParameters):
 class StickerSendTool:
     name = "channel.sticker.send"
     description = (
-        "根据情绪选择一张本地表情包；每轮最多一张。仅在 QQ 私聊中可用，"
+        "根据情绪选择一张 QQ 原生动画表情；每轮最多一张。仅在 QQ 私聊中可用，"
         "只能使用目录中的 sticker_id；严肃或任务型对话通常不要调用。"
     )
     risk = RiskLevel.MEDIUM
@@ -52,9 +52,5 @@ class StickerSendTool:
             metadata={
                 "sticker_id": record.id,
                 "label": record.label,
-                "segment_type": record.segment_type,
-                "emoji_id": record.emoji_id,
-                "emoji_package_id": record.emoji_package_id,
-                "key": record.key,
             },
         )

@@ -6,24 +6,30 @@ import asyncio
 
 from sqlalchemy import Engine
 
-from whitenight.agent.service import ChatService, DummyProvider
+from whitenight.agent.service import DummyProvider
 from whitenight.api.app import _build_memory_extractor
-from whitenight.channels.types import ChatRequest
 from whitenight.config import Settings
-from whitenight.memory import OllamaMemoryExtractor
+from whitenight.memory import (
+    MemoryService,
+    MemoryStore,
+    NullEmbeddingProvider,
+    OllamaMemoryExtractor,
+)
+from whitenight.memory.extraction import RuleBasedMemoryExtractor
+from whitenight.memory.maintenance import MemoryMaintenance
 from whitenight.models.ollama import OllamaProvider
 from whitenight.storage.sessions import SessionStore
 
 
-class RecordingMemory:
-    """记录 extract_and_store 是否被新消息取消。"""
+class RecordingExtractor:
+    """Record provider cancellation without replacing the durable memory service."""
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.cancelled = asyncio.Event()
 
-    async def extract_and_store(self, messages: list[object], session_id: str) -> None:
-        del messages, session_id
+    async def extract(self, messages):
+        del messages
         self.started.set()
         try:
             await asyncio.sleep(60)
@@ -46,19 +52,38 @@ def test_memory_extractor_uses_small_output_cap(settings: Settings) -> None:
 def test_new_message_cancels_running_extraction(engine: Engine, settings: Settings) -> None:
     store = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
     session = store.create_session(title="聊天优先")
-    memory = RecordingMemory()
-    service = ChatService(store, DummyProvider("在的"), settings, memory_service=memory)  # type: ignore[arg-type]
-    service._extract_delay_s = 0.0
-
-    async def collect(text: str) -> None:
-        async for _ in service.stream_reply(ChatRequest(session_id=session.id, text=text)):
-            pass
+    other = store.create_session(title="另一个会话")
+    store.add_message(session.id, "user", "我喜欢抹茶")
+    store.add_message(other.id, "user", "我住在杭州")
+    extractor = RecordingExtractor()
+    memory_store = MemoryStore(engine)
+    memory = MemoryService(memory_store, extractor, NullEmbeddingProvider())
+    maintenance = MemoryMaintenance(memory, store, DummyProvider(), delay_s=0)
 
     async def run() -> None:
-        await collect("第一条")
-        await asyncio.wait_for(memory.started.wait(), timeout=1.0)
-        await collect("第二条")
-        await asyncio.wait_for(memory.cancelled.wait(), timeout=1.0)
-        assert memory.cancelled.is_set()
+        maintenance.enqueue(session.id)
+        maintenance.enqueue(other.id)
+        maintenance.start()
+        await asyncio.wait_for(extractor.started.wait(), timeout=1.0)
+        maintenance.begin_chat()
+        await asyncio.wait_for(extractor.cancelled.wait(), timeout=1.0)
+        assert len(memory_store.pending_maintenance(due_only=False)) == 2
+        assert memory_store.get_extraction_checkpoint(session.id) == 0
+        await maintenance.close()
+
+        # A new service instance recovers both sessions without another user message.
+        recovered = MemoryMaintenance(
+            MemoryService(memory_store, RuleBasedMemoryExtractor(), NullEmbeddingProvider()),
+            store,
+            DummyProvider(),
+            delay_s=0,
+        )
+        assert await recovered.run_once() == 1
+        assert await recovered.run_once() == 1
+        assert memory_store.pending_maintenance(due_only=False) == []
+        assert memory_store.get_extraction_checkpoint(session.id) == 1
+        assert memory_store.get_extraction_checkpoint(other.id) == 1
+        assert {fact.value for fact in memory_store.list_facts()} == {"抹茶", "杭州"}
+        await recovered.close()
 
     asyncio.run(run())

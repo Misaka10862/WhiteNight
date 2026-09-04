@@ -98,3 +98,26 @@ class PolicyEngine:
             risk=risk,
             reason=f"{tool_name} 风险等级 {risk.value}",
         )
+
+    def evaluate_delegate(
+        self, risk: str, *, read_only: bool, action_policy: bool
+    ) -> PolicyDecision:
+        """Delegation cannot weaken the deterministic local action boundary."""
+        try:
+            level = RiskLevel(risk)
+        except ValueError:
+            return PolicyDecision(False, ApprovalMode.BLOCKED, RiskLevel.HIGH, "未知委派风险等级")
+        if level is RiskLevel.BATCH_DELETE:
+            return self.evaluate("file.batch_delete")
+        if level is RiskLevel.READ_ONLY and read_only:
+            return PolicyDecision(True, ApprovalMode.AUTO, level, "执行器提供确定性只读隔离")
+        if action_policy:
+            return PolicyDecision(
+                True, mode_for_risk(level), level, "执行器通过逐动作策略与审批契约"
+            )
+        return PolicyDecision(
+            False,
+            ApprovalMode.BLOCKED,
+            level,
+            "执行器尚未提供 WhiteNight 逐动作权限与审批保证，无法执行该风险任务",
+        )

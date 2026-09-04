@@ -31,7 +31,9 @@ def test_status_binds_to_localhost_only(settings: Settings) -> None:
 
 
 def test_websocket_echo(client: TestClient) -> None:
-    with client.websocket_connect("/api/v1/ws") as websocket:
+    with client.websocket_connect(
+        "/api/v1/ws", headers={"Origin": "http://127.0.0.1:5173"}
+    ) as websocket:
         websocket.send_text("ping")
         assert websocket.receive_text() == "ping"
 

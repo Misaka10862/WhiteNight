@@ -30,6 +30,7 @@ class EpisodeCandidate(BaseModel):
 
 
 class ExtractionResult(BaseModel):
+    succeeded: bool = True
     facts: list[FactCandidate] = Field(default_factory=list)
     episodes: list[EpisodeCandidate] = Field(default_factory=list)
 

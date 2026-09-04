@@ -26,7 +26,7 @@ def ocr_image(path: Path, languages: tuple[str, ...] = ("zh-Hans", "en-US")) -> 
     if not path.exists():
         raise OcrUnavailableError(f"图片不存在：{path}")
     try:
-        from ocrmac import ocrmac  # type: ignore[import-untyped]
+        from ocrmac import ocrmac
     except ImportError as exc:
         raise OcrUnavailableError("OCR 不可用：运行 uv sync --extra ocr") from exc
 

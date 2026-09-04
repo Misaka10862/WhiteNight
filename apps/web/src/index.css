@@ -460,6 +460,7 @@ textarea {
 
 .composer textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   border: 1px solid #e4e1da;
   border-radius: 8px;
@@ -474,6 +475,15 @@ textarea {
   border: none;
   border-radius: 8px;
   padding: 8px 14px;
+}
+
+.composer .danger {
+  border: 1px solid #e5c0bd;
+  border-radius: 8px;
+  padding: 8px 14px;
+  color: #a32e2e;
+  background: #fff4f2;
+  white-space: nowrap;
 }
 
 .attach {
@@ -541,6 +551,9 @@ textarea {
 .character-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .character-row small { color: #777; }
 .avatar-placeholder { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; background: #e9e5de; border-radius: 6px; font-weight: 700; }
+.backup-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
+.backup-summary > div { display: flex; justify-content: space-between; gap: 8px; }
+.backup-summary dd { margin: 0; font-variant-numeric: tabular-nums; }
 .character-editor { min-width: 0; }
 .compact-tabs { margin-top: 0; border-bottom: 1px solid #e4e1da; padding-bottom: 7px; }
 .editor-stack { display: flex; flex-direction: column; gap: 9px; }

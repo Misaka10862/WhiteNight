@@ -7,13 +7,14 @@ from collections.abc import AsyncGenerator
 
 from sqlalchemy import Engine
 
-from whitenight.delegates.base import DelegateError, DelegateUnavailableError
+from whitenight.delegates.base import DelegateCapabilities, DelegateError, DelegateUnavailableError
 from whitenight.delegates.events import DelegateEvent, DelegationRequest
 from whitenight.delegates.manager import DelegateManager, TaskStore
 
 
 class FakeCodex:
     name = "codex"
+    capabilities = DelegateCapabilities(read_only=True, action_policy=True)
 
     async def health(self) -> dict[str, object]:
         return {"ok": True}
@@ -44,7 +45,7 @@ class FlakyCodex(FakeCodex):
     async def submit(self, request: DelegationRequest) -> AsyncGenerator[DelegateEvent, None]:
         self.calls += 1
         if self.calls == 1:
-            raise DelegateError("临时失败")
+            raise DelegateError("提交前临时失败", execution_state="not_started")
         async for event in FakeCodex.submit(self, request):
             yield event
 

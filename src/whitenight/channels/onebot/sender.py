@@ -94,6 +94,59 @@ class OneBotSender:
         )
         return 1
 
+    def send_private_sticker(
+        self,
+        user_id: int,
+        *,
+        segment_type: str,
+        sub_type: int = 0,
+        emoji_id: str | None = None,
+        emoji_package_id: str | None = None,
+        key: str | None = None,
+        file: str | None = None,
+        url: str | None = None,
+        summary: str = "[动画表情]",
+    ) -> int:
+        """Send a catalog-bound QQ native sticker.
+
+        NapCat's personal custom-face transport is an ``image`` segment with
+        ``sub_type=1``.  It is uploaded by NapCat as a QQ animated face and is
+        rendered as ``[动画表情]``; it is not an ordinary image message.
+        Marketplace faces continue to use the explicit ``mface`` segment.
+        """
+        if segment_type == "image":
+            source = url or file
+            if sub_type != 1 or not source:
+                raise OneBotSendError("QQ 自定义动画表情参数不完整")
+            self._post(
+                "/send_private_msg",
+                json={
+                    "user_id": user_id,
+                    "message": [
+                        {
+                            "type": "image",
+                            "data": {
+                                "file": source,
+                                "sub_type": sub_type,
+                                "summary": summary,
+                            },
+                        }
+                    ],
+                },
+            )
+            return 1
+        if segment_type not in {"mface", "market_face"}:
+            raise OneBotSendError("不支持的 QQ 原生表情类型")
+        if not emoji_id:
+            raise OneBotSendError("QQ 商城表情标识不完整")
+        return self.send_private_mface(
+            user_id,
+            segment_type=segment_type,
+            emoji_id=emoji_id,
+            emoji_package_id=emoji_package_id,
+            key=key,
+        )
+
     def upload_private_file(self, user_id: int, path: str | Path, name: str) -> None:
         path = Path(path)
         if not path.is_file() or path.is_symlink():
@@ -134,6 +187,16 @@ class OneBotSender:
         if not isinstance(data, dict):
             raise OneBotSendError("OneBot get_image 返回缺少 data")
         return cast(dict[str, object], data)
+
+    def fetch_custom_face_detail(self, count: int = 200) -> list[dict[str, object]]:
+        """Read NapCat's saved personal QQ custom-face metadata."""
+        if count < 1 or count > 200:
+            raise OneBotSendError("自定义表情数量必须在 1 到 200 之间")
+        payload = self._post("/fetch_custom_face_detail", json={"count": count})
+        data = payload.get("data")
+        if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+            raise OneBotSendError("NapCat 自定义表情清单格式无效")
+        return [cast(dict[str, object], item) for item in data]
 
     def health(self) -> bool:
         """Return whether the OneBot HTTP endpoint is reachable and logged in."""

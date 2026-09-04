@@ -1,22 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  chatWebSocketUrl,
   deleteSession,
   exportSession,
   fetchMessages,
   renameSession,
-  type ChatEvent,
+  uploadAttachment,
+  type AttachmentRecord,
   type CharacterRecord,
-  type DelegateEvent,
   type MessageRecord,
   type SessionSummary,
 } from '../api'
 
-interface PendingUser {
-  content: string
-  imageUrl: string | null
-}
+import { ChatController, isRunning, shouldSendOnEnter } from '../chatController'
+import { formatUtcTimestamp } from '../time'
 
 export default function ChatPage({
   sessions,
@@ -24,23 +21,39 @@ export default function ChatPage({
   onSelectSession,
   onNewSession,
   characters,
+  controller,
 }: {
   sessions: SessionSummary[]
   activeId: string | null
   onSelectSession: (id: string) => void
   onNewSession: (characterId: string, greetingIndex?: number) => void
   characters: CharacterRecord[]
+  controller: ChatController
 }) {
-  const queryClient = useQueryClient()
-  const [draft, setDraft] = useState('')
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const draft = drafts[activeId ?? ''] ?? ''
+  const setDraft = (value: string) => setDrafts(current => ({ ...current, [activeId ?? '']: value }))
   const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [streaming, setStreaming] = useState(false)
-  const [streamingText, setStreamingText] = useState('')
-  const [pendingUser, setPendingUser] = useState<PendingUser | null>(null)
-  const [taskEvent, setTaskEvent] = useState<DelegateEvent | null>(null)
-  const [toolStatus, setToolStatus] = useState<string | null>(null)
-  const [chatError, setChatError] = useState<string | null>(null)
+  const [localError, setChatError] = useState<string | null>(null)
+  const [filesBySession, setFilesBySession] = useState<Record<string, AttachmentRecord[]>>({})
+  const attachedFiles = filesBySession[activeId ?? ''] ?? []
   const fileInput = useRef<HTMLInputElement>(null)
+  const documentInput = useRef<HTMLInputElement>(null)
+  const currentSession = useRef(activeId)
+  currentSession.current = activeId
+  const run = useSyncExternalStore(controller.subscribe, () => controller.snapshot(activeId))
+  const streaming = isRunning(run)
+  const streamingText = run?.streamingText ?? ''
+  const pendingUser = streaming && run ? { content: run.text, imageUrl: run.imageUrl, files: run.attachmentNames } : null
+  const taskEvent = run?.taskEvent
+  const toolStatus = run?.toolStatus
+  const chatError = localError ?? run?.error
+  const upload = useMutation({
+    mutationFn: ({ sessionId, file }: { sessionId: string; file: File }) => uploadAttachment(sessionId, file),
+    onSuccess: (file, { sessionId }) => setFilesBySession(current => ({ ...current, [sessionId]: [...(current[sessionId] ?? []), file] })),
+    onError: (error) => setChatError(String(error)),
+  })
+  useEffect(() => { setImageUrl(null); setChatError(null) }, [activeId])
   const activeSession = sessions.find((session) => session.id === activeId) ?? null
   const [newCharacterId, setNewCharacterId] = useState('')
   const [greeting, setGreeting] = useState('0')
@@ -59,60 +72,14 @@ export default function ChatPage({
   })
 
   const send = () => {
-    if (!activeId || streaming || (!draft.trim() && !imageUrl)) return
-    setPendingUser({ content: draft, imageUrl })
-    setStreamingText('')
-    setTaskEvent(null)
-    setToolStatus(null)
-    setStreaming(true)
-    setChatError(null)
-
-    const socket = new WebSocket(chatWebSocketUrl())
-    const payload = { session_id: activeId, text: draft, image_data_url: imageUrl }
+    if (!activeId || streaming || upload.isPending || (!draft.trim() && !imageUrl && !attachedFiles.length)) return
+    controller.start({ sessionId: activeId, text: draft, imageUrl, attachmentIds: attachedFiles.map(file => file.id), attachmentNames: attachedFiles.map(file => file.name) })
     setDraft('')
     setImageUrl(null)
+    setChatError(null)
+    setFilesBySession(current => ({ ...current, [activeId]: [] }))
     if (fileInput.current) fileInput.current.value = ''
-
-    socket.onopen = () => socket.send(JSON.stringify(payload))
-    socket.onmessage = (event: MessageEvent<string>) => {
-      const message = JSON.parse(event.data) as ChatEvent
-      if (message.type === 'start') {
-        setPendingUser(null)
-      } else if (message.type === 'chunk' && message.delta) {
-        setStreamingText((previous) => previous + message.delta)
-      } else if (message.type === 'task' && message.extra?.delegate_event) {
-        setTaskEvent(message.extra.delegate_event)
-      } else if (message.type === 'tool') {
-        const name = message.extra?.tool_name ?? '工具'
-        const status = message.extra?.status ?? 'running'
-        setToolStatus(`${name} · ${status}${message.extra?.message ? `：${message.extra.message}` : ''}`)
-      } else if (message.type === 'approval') {
-        setToolStatus(message.text ?? '操作等待审批')
-      } else if (message.type === 'done') {
-        setPendingUser(null)
-        setStreamingText('')
-        setTaskEvent(null)
-        setToolStatus(null)
-        setStreaming(false)
-        socket.close()
-        queryClient.invalidateQueries({ queryKey: ['messages', activeId] })
-        queryClient.invalidateQueries({ queryKey: ['sessions'] })
-        queryClient.invalidateQueries({ queryKey: ['tasks'] })
-      } else if (message.type === 'error') {
-        setPendingUser(null)
-        setStreamingText('')
-        setStreaming(false)
-        setChatError(message.message ?? '发生未知错误')
-        socket.close()
-        queryClient.invalidateQueries({ queryKey: ['messages', activeId] })
-        queryClient.invalidateQueries({ queryKey: ['sessions'] })
-      }
-    }
-    socket.onerror = () => {
-      setStreaming(false)
-      setChatError('无法连接本机服务，请确认后端已启动（uv run whitenight）')
-    }
-    socket.onclose = () => setStreaming(false)
+    if (documentInput.current) documentInput.current.value = ''
   }
 
   const pickImage = (file: File | undefined) => {
@@ -125,13 +92,14 @@ export default function ChatPage({
       setChatError('图片不能超过 8 MiB')
       return
     }
+    const selectedSession = activeId
     const reader = new FileReader()
-    reader.onload = () => setImageUrl(String(reader.result))
+    reader.onload = () => { if (currentSession.current === selectedSession) setImageUrl(String(reader.result)) }
     reader.readAsDataURL(file)
   }
 
   const shownMessages = messages.data ?? []
-  const disabled = streaming || !activeId
+  const disabled = streaming || !activeId || upload.isPending
 
   return (
     <div className="chat-layout">
@@ -170,6 +138,7 @@ export default function ChatPage({
                   <img className="message-image" src={pendingUser.imageUrl} alt="附件图片" />
                 )}
                 {pendingUser.content && <p>{pendingUser.content}</p>}
+                {pendingUser.files.map((name, index) => <p className="muted" key={`${name}-${index}`}>附件：{name}</p>)}
               </div>
             </div>
           )}
@@ -203,9 +172,11 @@ export default function ChatPage({
           )}
         </div>
 
+        {messages.isError && <div className="chat-error" role="alert">历史加载失败：{String(messages.error)}</div>}
         {chatError && (
           <div className="chat-error" role="alert">
             {chatError}
+            {run?.status === 'failed' && run.text && <button onClick={() => setDraft(run.text)}>恢复文字草稿</button>}
           </div>
         )}
 
@@ -216,6 +187,10 @@ export default function ChatPage({
           </div>
         )}
 
+        {attachedFiles.length > 0 && <ul className="card-list">{attachedFiles.map(file => (
+          <li key={file.id} className="card">{file.name}<button onClick={() => setFilesBySession(current => ({ ...current, [activeId ?? '']: attachedFiles.filter(item => item.id !== file.id) }))}>移除</button></li>
+        ))}</ul>}
+        {upload.isPending && <p role="status">正在上传附件…</p>}
         <form
           className="composer"
           onSubmit={(event) => {
@@ -234,6 +209,11 @@ export default function ChatPage({
           <button type="button" className="attach" onClick={() => fileInput.current?.click()} title="发送图片">
             🖼
           </button>
+          <input ref={documentInput} type="file" hidden aria-label="选择文档" onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file && activeId) upload.mutate({ sessionId: activeId, file })
+          }} />
+          <button type="button" className="attach" disabled={disabled} onClick={() => documentInput.current?.click()} title="发送文件">文件</button>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -242,15 +222,13 @@ export default function ChatPage({
             disabled={disabled}
             aria-label="聊天输入"
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
+              if (shouldSendOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode })) {
                 event.preventDefault()
                 send()
               }
             }}
           />
-          <button type="submit" className="send" disabled={disabled}>
-            发送
-          </button>
+          {streaming ? <button type="button" className="danger" onClick={() => activeId && void controller.cancel(activeId)}>停止</button> : <button type="submit" className="send" disabled={disabled}>发送</button>}
         </form>
       </section>
     </div>
@@ -276,7 +254,10 @@ function MessageBubble({ message }: { message: MessageRecord }) {
           <img className="message-image" src={message.image_data_url} alt="附件图片" />
         )}
         {message.content && <p>{message.content}</p>}
-        {!message.content && !message.image_data_url && <p className="empty">（空消息）</p>}
+        {message.attachments?.map(attachment => <p className="muted" key={attachment.id}>
+          附件：{attachment.name}{attachment.status === 'failed' ? ' · 接收失败' : ''}
+        </p>)}
+        {!message.content && !message.image_data_url && !message.attachments?.length && <p className="empty">（空消息）</p>}
       </div>
     </div>
   )
@@ -308,13 +289,14 @@ export function SessionsPage({
     <section className="page" aria-label="会话管理">
       <h2>会话管理</h2>
       <p className="hint">所有入口共享同一会话。删除立即移除且不记录正文审计。</p>
+      {(rename.isError || remove.isError) && <div role="alert" className="chat-error">{String(rename.error ?? remove.error)}</div>}
       <ul className="card-list">
         {sessions.map((session) => (
           <li key={session.id} className={session.id === activeId ? 'card active' : 'card'}>
             <button className="link" onClick={() => onSelectSession(session.id)}>
               {session.title}
             </button>
-            <span className="muted">{session.message_count} 条 · {session.updated_at.slice(0, 16).replace('T', ' ')}</span>
+            <span className="muted">{session.message_count} 条 · {formatUtcTimestamp(session.updated_at)}</span>
             <div className="actions">
               <button
                 onClick={() => {

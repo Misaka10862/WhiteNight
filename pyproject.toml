@@ -95,7 +95,11 @@ strict = true
 packages = ["whitenight"]
 exclude = ["tests"]
 
+[[tool.mypy.overrides]]
+module = ["ocrmac", "ocrmac.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-pythonpath = ["src"]
+pythonpath = ["src", "."]

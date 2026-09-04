@@ -32,7 +32,9 @@ def test_streaming_chat_persists_and_survives_restart(
 ) -> None:
     session = chat_client.post("/api/v1/sessions", json={"title": "链路测试"}).json()
 
-    with chat_client.websocket_connect("/api/v1/chat/ws") as websocket:
+    with chat_client.websocket_connect(
+        "/api/v1/chat/ws", headers={"Origin": "http://127.0.0.1:5173"}
+    ) as websocket:
         websocket.send_json(_chat_payload(session["id"], "你好"))
         events = _collect_events(websocket)
 
@@ -59,7 +61,9 @@ def test_streaming_chat_persists_and_survives_restart(
 def test_image_message_saved_and_recovered(chat_client: TestClient) -> None:
     session = chat_client.post("/api/v1/sessions", json={}).json()
     image = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
-    with chat_client.websocket_connect("/api/v1/chat/ws") as websocket:
+    with chat_client.websocket_connect(
+        "/api/v1/chat/ws", headers={"Origin": "http://127.0.0.1:5173"}
+    ) as websocket:
         websocket.send_json(_chat_payload(session["id"], "看这张图", image=image))
         events = _collect_events(websocket)
     assert events[-1]["type"] == "done"
@@ -72,7 +76,9 @@ def test_image_message_saved_and_recovered(chat_client: TestClient) -> None:
 
 def test_invalid_image_reports_error(chat_client: TestClient) -> None:
     session = chat_client.post("/api/v1/sessions", json={}).json()
-    with chat_client.websocket_connect("/api/v1/chat/ws") as websocket:
+    with chat_client.websocket_connect(
+        "/api/v1/chat/ws", headers={"Origin": "http://127.0.0.1:5173"}
+    ) as websocket:
         websocket.send_json(_chat_payload(session["id"], "图", image="data:text/plain;base64,aGk="))
         event = json.loads(websocket.receive_text())
     assert event["type"] == "error"
@@ -80,7 +86,9 @@ def test_invalid_image_reports_error(chat_client: TestClient) -> None:
 
 
 def test_unknown_session_reports_error(chat_client: TestClient) -> None:
-    with chat_client.websocket_connect("/api/v1/chat/ws") as websocket:
+    with chat_client.websocket_connect(
+        "/api/v1/chat/ws", headers={"Origin": "http://127.0.0.1:5173"}
+    ) as websocket:
         websocket.send_json(_chat_payload("missing-session"))
         event = json.loads(websocket.receive_text())
     assert event["type"] == "error"
@@ -102,7 +110,9 @@ def test_text_model_image_fallback(settings: Settings, engine) -> None:
     with TestClient(create_app(text_settings, model_provider=DummyProvider())) as client:
         session = client.post("/api/v1/sessions", json={}).json()
         image = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
-        with client.websocket_connect("/api/v1/chat/ws") as websocket:
+        with client.websocket_connect(
+            "/api/v1/chat/ws", headers={"Origin": "http://127.0.0.1:5173"}
+        ) as websocket:
             websocket.send_json(_chat_payload(session["id"], "看这张图", image=image))
             events = _collect_events(websocket)
         assert events[-1]["type"] == "done"

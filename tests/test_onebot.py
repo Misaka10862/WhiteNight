@@ -358,7 +358,42 @@ def test_file_segment_saves_local_copy(engine: Engine, settings: Settings, tmp_p
     assert qq_files[0].read_bytes() == b"hello qq"
     sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
     message = sessions.list_messages(sessions.list_sessions()[0].id)[0]
-    assert str(qq_files[0].resolve()) in message.content
+    assert message.attachments[0].path == str(qq_files[0].resolve())
+    assert message.attachments[0].status == "ready"
+
+
+def test_oversized_file_records_failure_and_explains_how_to_retry(
+    engine: Engine, settings: Settings, tmp_path
+) -> None:
+    source = tmp_path / "too-large.zip"
+    source.touch()
+    source.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    event = {
+        "post_type": "message",
+        "message_type": "private",
+        "message_id": 61,
+        "user_id": 10001,
+        "raw_message": "",
+        "message": [
+            {
+                "type": "file",
+                "data": {"file": str(source), "file_size": source.stat().st_size},
+            }
+        ],
+    }
+
+    status = asyncio_run(adapter.handle_event(event))
+
+    assert status["status"] == "file_failed"
+    assert sender.messages[-1][1] == (
+        "文件接收失败：too-large.zip 超过当前 16 MiB 限制，请压缩后或分卷重新发送。"
+    )
+    sessions = SessionStore(engine, attachments_dir=settings.data_dir / "attachments")
+    messages = sessions.list_messages(sessions.list_sessions()[0].id)
+    assert messages[0].attachments[0].status == "failed"
+    assert messages[0].attachments[0].name == "too-large.zip"
 
 
 def test_file_segment_resolves_file_id_through_onebot(engine: Engine, settings: Settings) -> None:
@@ -454,7 +489,15 @@ def test_qq_approval_commands(engine: Engine, settings: Settings) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)
     approvals: ApprovalService = adapter._approvals
-    request = approvals.request("file.write", "medium", "once", '{"path":"/x"}', session_id=None)
+    request = approvals.request(
+        "file.write",
+        "medium",
+        "once",
+        '{"path":"/x"}',
+        session_id=None,
+        channel="onebot",
+        channel_target="10001",
+    )
 
     event = _private(10, f"同意 {request.code}")
     assert asyncio_run(adapter.handle_event(event))["status"] == "approval_handled"
@@ -464,7 +507,14 @@ def test_qq_approval_commands(engine: Engine, settings: Settings) -> None:
     assert asyncio_run(adapter.handle_event(replay))["status"] == "approval_invalid"
     assert "无效" in sender.messages[-1][1]
 
-    other = approvals.request("file.delete", "delete", "once", '{"path":"/y"}')
+    other = approvals.request(
+        "file.delete",
+        "delete",
+        "once",
+        '{"path":"/y"}',
+        channel="onebot",
+        channel_target="10001",
+    )
     reject = _private(12, f"拒绝 {other.code}")
     assert asyncio_run(adapter.handle_event(reject))["status"] == "approval_handled"
     assert "已拒绝" in sender.messages[-1][1]
@@ -551,6 +601,28 @@ def test_get_file_uses_onebot_file_id() -> None:
 
     assert captured == {"file_id": "file-123"}
     assert metadata["url"] == "http://local/data.bin"
+
+
+def test_fetch_custom_face_detail_uses_onebot_action() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "retcode": 0,
+                "data": [{"desc": "卖萌", "url": "https://p.qpic.cn/example"}],
+            },
+            request=request,
+        )
+
+    sender = OneBotSender("http://onebot", transport=httpx.MockTransport(handler))
+    details = sender.fetch_custom_face_detail(18)
+
+    assert captured == {"count": 18}
+    assert details[0]["desc"] == "卖萌"
 
 
 def test_onebot_sender_does_not_retry_client_error() -> None:

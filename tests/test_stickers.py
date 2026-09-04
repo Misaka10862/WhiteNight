@@ -10,7 +10,13 @@ from PIL import Image
 
 from whitenight.agent.service import ChatService
 from whitenight.channels.onebot import ChannelSessionStore, OneBotAdapter, OneBotSender
-from whitenight.models.base import ModelChunk, ProviderMessage, ToolCall, ToolSpec
+from whitenight.models.base import (
+    ModelCapabilities,
+    ModelChunk,
+    ProviderMessage,
+    ToolCall,
+    ToolSpec,
+)
 from whitenight.policy.approvals import ApprovalService
 from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import PolicyEngine
@@ -119,6 +125,8 @@ def test_sticker_tool_is_auto_policy_and_strict_id(engine, settings, tmp_path: P
 
 
 class StickerProvider:
+    capabilities = ModelCapabilities(tools=True)
+
     async def stream_chat(
         self, messages: list[ProviderMessage], tools: list[ToolSpec] | None = None
     ):
@@ -234,3 +242,60 @@ def test_onebot_sender_mface_segment() -> None:
         "type": "mface",
         "data": {"emoji_id": "123", "emoji_package_id": "9"},
     }
+
+
+def test_onebot_sender_personal_qq_face_uses_animation_subtype() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"status": "ok", "retcode": 0}, request=request)
+
+    sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler))
+    assert (
+        sender.send_private_sticker(
+            10001,
+            segment_type="image",
+            sub_type=1,
+            url="https://p.qpic.cn/qq_expression/example/0",
+        )
+        == 1
+    )
+    assert captured["user_id"] == 10001
+    assert captured["message"] == [
+        {
+            "type": "image",
+            "data": {
+                "file": "https://p.qpic.cn/qq_expression/example/0",
+                "sub_type": 1,
+                "summary": "[动画表情]",
+            },
+        }
+    ]
+
+
+def test_catalog_accepts_personal_qq_face_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "stickers"
+    root.mkdir()
+    Image.new("RGBA", (2, 2), (0, 0, 0, 0)).save(root / "face.png")
+    (root / "catalog.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "stickers": [
+                    StickerRecord(
+                        id="face-01",
+                        file="face.png",
+                        label="卖萌",
+                        segment_type="image",
+                        sub_type=1,
+                        native_url="https://p.qpic.cn/qq_expression/example/0",
+                    ).model_dump(mode="json")
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    catalog = StickerCatalog(root)
+    assert catalog.records(native_only=True)[0].native_ready

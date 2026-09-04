@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -11,15 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session as OrmSession
 
+from whitenight.policy.approvals import params_digest as params_digest
 from whitenight.storage.models import Approval, PendingToolCall
 
 
 def canonical_params(params: dict[str, Any]) -> str:
     return json.dumps(params, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def params_digest(params: dict[str, Any]) -> str:
-    return hashlib.sha256(canonical_params(params).encode("utf-8")).hexdigest()
 
 
 class PendingToolRecord(BaseModel):

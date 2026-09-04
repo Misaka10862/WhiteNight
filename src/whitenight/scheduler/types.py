@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProactiveConfig(BaseModel):
@@ -15,6 +15,14 @@ class ProactiveConfig(BaseModel):
     quiet_end: str = Field(default="08:00", pattern=r"^\d{2}:\d{2}$")
     suppress_minutes: int = Field(default=60, ge=0, le=480)
     skip_grace_minutes: int = Field(default=45, ge=5, le=240)
+
+    @field_validator("quiet_start", "quiet_end")
+    @classmethod
+    def valid_clock_time(cls, value: str) -> str:
+        hour, minute = (int(part) for part in value.split(":"))
+        if hour > 23 or minute > 59:
+            raise ValueError("静默时间必须是有效的 HH:MM 时间")
+        return value
 
 
 class ProactiveDelivery(BaseModel):

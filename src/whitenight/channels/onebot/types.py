@@ -37,6 +37,7 @@ class ParsedOneBotMessage:
     file_path: str | None = None
     file_name: str | None = None
     file_id: str | None = None
+    file_size: int | None = None
     is_poke: bool = False
     poke_type: str | None = None
     poke_id: str | None = None
@@ -94,6 +95,9 @@ def parse_segments(event: OneBotPrivateMessageEvent) -> ParsedOneBotMessage:
             parsed.file_path = _first_string(segment.data, "url", "file")
             parsed.file_name = _first_string(segment.data, "file")
             parsed.file_id = _first_string(segment.data, "file_id", "id")
+            raw_size = segment.data.get("file_size", segment.data.get("size"))
+            if isinstance(raw_size, (int, float)) and not isinstance(raw_size, bool):
+                parsed.file_size = int(raw_size)
         elif segment.type == "poke":
             parsed.is_poke = True
             parsed.poke_type = _first_string(segment.data, "type")

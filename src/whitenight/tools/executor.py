@@ -126,6 +126,7 @@ class ToolExecutor:
                 return ExecutionOutcome(status="refused", message=f"参数不合法：{exc}")
 
         consumed_approval_id: str | None = None
+        bound_params = validated.model_dump(mode="json")
 
         if approval_id is not None:
             expected_scope = "session" if decision.mode is ApprovalMode.SESSION else "once"
@@ -133,6 +134,10 @@ class ToolExecutor:
                 approval_id,
                 session_id=session_id,
                 expected_scope=expected_scope,
+                tool_name=tool_name,
+                params=bound_params,
+                channel=channel,
+                channel_target=channel_target,
             )
             if not resolution.ok:
                 return self._refused_resolution(
@@ -143,11 +148,22 @@ class ToolExecutor:
         if approval_id is not None or decision.mode is ApprovalMode.AUTO:
             pass
         elif decision.mode is ApprovalMode.SESSION:
-            if session_id and self._approvals.has_session_grant(session_id, tool_name):
+            if session_id and self._approvals.has_session_grant(
+                session_id,
+                tool_name,
+                channel=channel,
+                channel_target=channel_target,
+            ):
                 pass
             elif approval_code:
                 resolution = self._approvals.resolve_once(
-                    approval_code, session_id=session_id, expected_scope="session"
+                    approval_code,
+                    session_id=session_id,
+                    expected_scope="session",
+                    tool_name=tool_name,
+                    params=bound_params,
+                    channel=channel,
+                    channel_target=channel_target,
                 )
                 if not resolution.ok:
                     return self._refused_resolution(
@@ -162,10 +178,12 @@ class ToolExecutor:
                     params_summary=summary,
                     session_id=session_id,
                     channel=channel,
+                    channel_target=channel_target,
+                    params=bound_params,
                 )
                 return ExecutionOutcome(
                     status="waiting_approval",
-                    message=f"{tool_name} 需要会话授权",
+                    message=f"{tool_name} 需要审批，可选择单次或会话授权",
                     approval_id=request.id,
                     approval_code=request.code,
                     approval_scope="session",
@@ -180,6 +198,8 @@ class ToolExecutor:
                     params_summary=summary,
                     session_id=session_id,
                     channel=channel,
+                    channel_target=channel_target,
+                    params=bound_params,
                 )
                 return ExecutionOutcome(
                     status="waiting_approval",
@@ -190,7 +210,13 @@ class ToolExecutor:
                     metadata=approval_metadata,
                 )
             resolution = self._approvals.resolve_once(
-                approval_code, session_id=session_id, expected_scope="once"
+                approval_code,
+                session_id=session_id,
+                expected_scope="once",
+                tool_name=tool_name,
+                params=bound_params,
+                channel=channel,
+                channel_target=channel_target,
             )
             if not resolution.ok:
                 return self._refused_resolution(

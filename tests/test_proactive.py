@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import random
+import threading
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import Engine
 
 from whitenight.config import Settings
@@ -101,7 +103,7 @@ def test_disabled_tick_skips(engine: Engine, tmp_path) -> None:
 
 def test_due_tick_sends_and_reschedules(engine: Engine, tmp_path) -> None:
     store = ProactiveStore(engine)
-    store.update_config(_config())
+    store.update_config(_config(quiet_start="00:00", quiet_end="00:00"))
     now_utc = datetime.now(UTC).replace(tzinfo=None)
     store.set_next_candidate(now_utc - timedelta(minutes=1))
     service, sender = _service(engine, tmp_path)
@@ -116,7 +118,7 @@ def test_due_tick_sends_and_reschedules(engine: Engine, tmp_path) -> None:
 
 def test_proactive_sender_receives_qq_owner(engine: Engine, tmp_path) -> None:
     store = ProactiveStore(engine)
-    store.update_config(_config())
+    store.update_config(_config(quiet_start="00:00", quiet_end="00:00"))
     now_utc = datetime.now(UTC).replace(tzinfo=None)
     store.set_next_candidate(now_utc - timedelta(minutes=1))
     service, sender = _service(engine, tmp_path, qq_owner_ids=[10001])
@@ -171,7 +173,7 @@ def test_log_sender_writes_jsonl(tmp_path) -> None:
 
 def test_proactive_audit_omits_message_body(engine: Engine, tmp_path) -> None:
     store = ProactiveStore(engine)
-    store.update_config(_config())
+    store.update_config(_config(quiet_start="00:00", quiet_end="00:00"))
     now_utc = datetime.now(UTC).replace(tzinfo=None)
     store.set_next_candidate(now_utc - timedelta(minutes=1))
     memory = MemoryService(MemoryStore(engine), NullMemoryExtractor(), NullEmbeddingProvider())
@@ -195,3 +197,123 @@ def test_proactive_audit_omits_message_body(engine: Engine, tmp_path) -> None:
     assert records[0].action == "proactive.sent"
     assert "secret proactive body" not in records[0].params_summary
     assert "secret proactive body" not in records[0].result_summary
+
+
+def test_due_candidate_is_suppressed_by_new_activity(engine: Engine, tmp_path) -> None:
+    from whitenight.scheduler.poisson import local_naive_to_utc
+
+    now = datetime(2026, 9, 4, 12, 0)
+    store = ProactiveStore(engine)
+    store.update_config(_config())
+    store.set_next_candidate(local_naive_to_utc(now - timedelta(minutes=1)))
+    store.mark_activity(local_naive_to_utc(now))
+    service, sender = _service(engine, tmp_path)
+    assert asyncio.run(service.tick(now)).action == "skipped_activity"
+    assert sender.messages == []
+
+
+def test_due_candidate_cannot_cross_into_quiet_hours(engine: Engine, tmp_path) -> None:
+    from whitenight.scheduler.poisson import local_naive_to_utc
+
+    now = datetime(2026, 9, 4, 23, 1)
+    store = ProactiveStore(engine)
+    store.update_config(_config())
+    store.set_next_candidate(local_naive_to_utc(now - timedelta(minutes=2)))
+    service, sender = _service(engine, tmp_path)
+    assert asyncio.run(service.tick(now)).action == "skipped_quiet"
+    assert sender.messages == []
+
+
+def test_pause_while_composing_prevents_delivery(engine: Engine, tmp_path) -> None:
+    from whitenight.scheduler.poisson import local_naive_to_utc
+
+    store = ProactiveStore(engine)
+    now = datetime(2026, 9, 4, 12, 0)
+    store.update_config(_config())
+    store.set_next_candidate(local_naive_to_utc(now - timedelta(minutes=1)))
+
+    class PausingProvider(FakeProvider):
+        async def stream_chat(self, messages):
+            store.pause(None)
+            yield ModelChunk(delta="should not be delivered", done=True)
+
+    service, sender = _service(engine, tmp_path, provider=PausingProvider())
+    assert asyncio.run(service.tick(now)).action == "skipped_paused"
+    assert sender.messages == []
+
+
+def test_equal_quiet_endpoints_disable_quiet_hours() -> None:
+    from whitenight.scheduler.poisson import _in_quiet
+
+    config = _config(quiet_start="00:00", quiet_end="00:00")
+    assert not _in_quiet(datetime(2026, 9, 4, 12, 0), config)
+
+
+@pytest.mark.parametrize("change", ["disable", "activity", "quiet"])
+def test_eligibility_rechecked_after_composition(engine: Engine, tmp_path, change: str) -> None:
+    from whitenight.scheduler.poisson import local_naive_to_utc
+
+    now = [datetime(2026, 9, 4, 22, 59)]
+    store = ProactiveStore(engine)
+    store.update_config(_config())
+    store.set_next_candidate(local_naive_to_utc(now[0] - timedelta(minutes=1)))
+
+    class ChangingProvider(FakeProvider):
+        async def stream_chat(self, messages):
+            if change == "disable":
+                store.update_config(_config(enabled=False))
+            elif change == "activity":
+                store.mark_activity(local_naive_to_utc(now[0]))
+            else:
+                now[0] = now[0] + timedelta(minutes=2)
+            yield ModelChunk(delta="should not be delivered", done=True)
+
+    service, sender = _service(engine, tmp_path, provider=ChangingProvider())
+    service._clock = lambda: now[0]
+    outcome = asyncio.run(service.tick())
+    assert (
+        outcome.action
+        == {
+            "disable": "skipped_disabled",
+            "activity": "skipped_activity",
+            "quiet": "skipped_quiet",
+        }[change]
+    )
+    assert sender.messages == []
+
+
+def test_slow_sender_keeps_event_loop_responsive(engine: Engine, tmp_path) -> None:
+    from whitenight.scheduler.poisson import local_naive_to_utc
+
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowSender(FakeSender):
+        def send(self, message, metadata):
+            entered.set()
+            assert release.wait(2)
+            return super().send(message, metadata)
+
+    store = ProactiveStore(engine)
+    now = datetime(2026, 9, 4, 12, 0)
+    store.update_config(_config())
+    store.set_next_candidate(local_naive_to_utc(now - timedelta(minutes=1)))
+    service, sender = _service(engine, tmp_path, sender=SlowSender())
+
+    async def run() -> None:
+        pending = asyncio.create_task(service.tick(now))
+        for _ in range(200):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert entered.is_set() and not pending.done()
+        release.set()
+        assert (await pending).action == "sent"
+
+    asyncio.run(run())
+    assert sender.messages == ["在吗，主人"]
+
+
+@pytest.mark.parametrize("value", ["24:00", "12:60", "99:99"])
+def test_invalid_quiet_time_rejected(value: str) -> None:
+    with pytest.raises(ValueError):
+        _config(quiet_start=value)
