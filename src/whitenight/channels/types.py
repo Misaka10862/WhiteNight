@@ -96,3 +96,11 @@ class ChatEvent(EventEnvelope):
     text: str | None = None
     message: str | None = None
     extra: dict[str, Any] | None = None
+
+
+class ChannelDeliveryError(RuntimeError):
+    """A failed delivery is retryable only when no request reached the peer."""
+
+    def __init__(self, message: str, *, retry_safe: bool = False) -> None:
+        super().__init__(message)
+        self.retry_safe = retry_safe

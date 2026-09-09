@@ -40,7 +40,12 @@ class FakeQQ:
 
 def _adapter(engine: Engine, settings: Settings, sender: FakeQQ):
     qq_settings = settings.model_copy(
-        update={"qq_enabled": True, "qq_owner_ids": [10001], "qq_rate_limit_seconds": 0.0}
+        update={
+            "qq_enabled": True,
+            "qq_owner_ids": [10001],
+            "qq_rate_limit_seconds": 0.0,
+            "qq_message_window_seconds": 0.0,
+        }
     )
     sessions = SessionStore(engine, attachments_dir=qq_settings.data_dir / "attachments")
     channel_sessions = ChannelSessionStore(engine, sessions)
@@ -115,7 +120,12 @@ def test_character_command_is_deterministic_and_rotates_session(
 ) -> None:
     sender = FakeQQ()
     qq_settings = settings.model_copy(
-        update={"qq_enabled": True, "qq_owner_ids": [10001], "qq_rate_limit_seconds": 0.0}
+        update={
+            "qq_enabled": True,
+            "qq_owner_ids": [10001],
+            "qq_rate_limit_seconds": 0.0,
+            "qq_message_window_seconds": 0.0,
+        }
     )
     sessions = SessionStore(engine, attachments_dir=qq_settings.data_dir / "attachments")
     mappings = ChannelSessionStore(engine, sessions)
@@ -430,13 +440,16 @@ def test_file_segment_resolves_file_id_through_onebot(engine: Engine, settings: 
     assert saved[0].read_bytes() == b"resolved by onebot"
 
 
-def test_approval_without_code_returns_exact_qq_command(engine: Engine, settings: Settings) -> None:
+@pytest.mark.parametrize("tool_name", ["file.write", "file.delete", "delegate.hermes.action"])
+def test_other_approvals_without_code_still_require_code(
+    engine: Engine, settings: Settings, tool_name: str
+) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)
     first = asyncio_run(adapter.handle_event(_private(801, "你好")))
     session_id = str(first["session_id"])
     approval = adapter._approvals.request(
-        "file.move",
+        tool_name,
         "medium",
         "once",
         '{"source":"/tmp/a","destination":"/tmp/b"}',
@@ -450,6 +463,49 @@ def test_approval_without_code_returns_exact_qq_command(engine: Engine, settings
     assert sender.messages[-1][1] == (
         f"审批必须带一次性编号。请回复：同意 {approval.code}，或：拒绝 {approval.code}。"
     )
+
+
+@pytest.mark.parametrize("confirmation", ["同意", "同意。", "允许操作"])
+def test_move_approval_without_code(engine: Engine, settings: Settings, confirmation: str) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    first = asyncio_run(adapter.handle_event(_private(801, "你好")))
+    adapter._approvals.request(
+        "file.move",
+        "medium",
+        "once",
+        "move a to b",
+        session_id=str(first["session_id"]),
+        channel="onebot",
+        channel_target="10001",
+    )
+    assert asyncio_run(adapter.handle_event(_private(802, confirmation)))["status"] == (
+        "approval_handled"
+    )
+    assert "已批准 file.move" in sender.messages[-1][1]
+    assert not adapter._approvals.list_pending()
+    assert asyncio_run(adapter.handle_event(_private(803, confirmation)))["status"] == (
+        "approval_invalid"
+    )
+
+
+def test_ambiguous_move_confirmation_requires_selection(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    first = asyncio_run(adapter.handle_event(_private(801, "你好")))
+    for name in ("file.move", "file.write"):
+        adapter._approvals.request(
+            name,
+            "medium",
+            "once",
+            "pending operation",
+            session_id=str(first["session_id"]),
+            channel="onebot",
+            channel_target="10001",
+        )
+    status = asyncio_run(adapter.handle_event(_private(802, "同意")))
+    assert status["status"] == "approval_code_required"
+    assert len(adapter._approvals.list_pending()) == 2
 
 
 def test_approval_without_code_reports_when_nothing_is_pending(
@@ -544,7 +600,7 @@ def test_onebot_sender_retries(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(1)
         if len(calls) == 1:
-            return httpx.Response(500, request=request)
+            raise httpx.ConnectError("connection refused", request=request)
         return httpx.Response(200, json={"retcode": 0}, request=request)
 
     sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler), max_attempts=2)
@@ -669,3 +725,135 @@ def asyncio_run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+def test_notice_poke_replies_and_filters(engine: Engine, settings: Settings) -> None:
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    notice = {
+        "post_type": "notice",
+        "notice_type": "notify",
+        "sub_type": "poke",
+        "user_id": 10001,
+        "target_id": 20002,
+        "self_id": 20002,
+        "time": 123,
+    }
+    assert asyncio_run(adapter.handle_event(notice))["status"] == "replied"
+    assert asyncio_run(adapter.handle_event(notice))["status"] == "duplicate"
+    assert asyncio_run(adapter.handle_event({**notice, "group_id": 9}))["status"] == "ignored_group"
+    assert (
+        asyncio_run(adapter.handle_event({**notice, "target_id": 10001}))["status"]
+        == "ignored_poke_target"
+    )
+    assert (
+        asyncio_run(adapter.handle_event({**notice, "user_id": 999}))["status"]
+        == "ignored_not_owner"
+    )
+    assert len(sender.messages) == 1
+
+
+def test_message_window_groups_in_order_and_excludes_duplicates(
+    engine: Engine, settings: Settings
+) -> None:
+    import asyncio
+
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    adapter._settings.qq_message_window_seconds = 0.03
+
+    async def run():
+        results = await asyncio.gather(
+            adapter.handle_event(_private(9001, "第一条")),
+            adapter.handle_event(_private(9002, "第二条")),
+            adapter.handle_event(_private(9002, "第二条")),
+        )
+        assert [result["status"] for result in results] == ["replied", "replied", "duplicate"]
+        assert len(sender.messages) == 1
+        await adapter.handle_event(_private(9003, "第三条"))
+        assert len(sender.messages) == 2
+
+    asyncio.run(run())
+    session_id = adapter._channel_sessions.get_or_create("onebot", "10001")
+    messages = adapter._sessions.list_messages(session_id)
+    users = [message.content for message in messages if message.role == "user"]
+    assert users == ["[消息 1]\n第一条\n\n[消息 2]\n第二条", "第三条"]
+
+
+def test_cancelled_webhook_keeps_batch_alive(engine: Engine, settings: Settings) -> None:
+    import asyncio
+
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    adapter._settings.qq_message_window_seconds = 0.02
+
+    async def run():
+        first = asyncio.create_task(adapter.handle_event(_private(9101, "第一条")))
+        await asyncio.sleep(0)
+        second = asyncio.create_task(adapter.handle_event(_private(9102, "第二条")))
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert (await second)["status"] == "replied"
+        assert len(sender.messages) == 1
+        assert not adapter._pending
+        assert not adapter._workers
+
+    asyncio.run(run())
+
+
+def test_zero_window_disables_grouping(engine: Engine, settings: Settings) -> None:
+    import asyncio
+
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+
+    async def run():
+        await asyncio.gather(
+            adapter.handle_event(_private(9201, "一")), adapter.handle_event(_private(9202, "二"))
+        )
+
+    asyncio.run(run())
+    assert len(sender.messages) == 2
+
+
+def test_submitted_events_ack_before_generation_and_drain(
+    engine: Engine, settings: Settings
+) -> None:
+    import asyncio
+
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    adapter._settings.qq_message_window_seconds = 0.02
+
+    async def run():
+        assert adapter.submit_event(_private(9301, "一"))["status"] == "accepted"
+        assert adapter.submit_event(_private(9302, "二"))["status"] == "accepted"
+        assert not sender.messages
+        await adapter.close()
+        assert len(sender.messages) == 1
+        assert not adapter._inflight
+
+    asyncio.run(run())
+
+
+def test_clear_seals_window_before_following_messages(engine: Engine, settings: Settings) -> None:
+    import asyncio
+
+    sender = FakeQQ()
+    adapter = _adapter(engine, settings, sender)
+    adapter._settings.qq_message_window_seconds = 0.02
+
+    async def run():
+        results = await asyncio.gather(
+            adapter.handle_event(_private(9401, "旧消息")),
+            adapter.handle_event(_private(9402, "/clear")),
+            adapter.handle_event(_private(9403, "新消息")),
+        )
+        assert results[0]["session_id"] == results[1]["previous_session_id"]
+        assert results[2]["session_id"] == results[1]["session_id"]
+        assert results[0]["session_id"] != results[2]["session_id"]
+        messages = adapter._sessions.list_messages(results[2]["session_id"])
+        assert [m.content for m in messages if m.role == "user"] == ["新消息"]
+
+    asyncio.run(run())

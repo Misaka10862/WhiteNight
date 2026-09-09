@@ -70,3 +70,7 @@ class PromptPreviewRequest(BaseModel):
 
 class TokenizerPathUpdate(BaseModel):
     path: str = Field(min_length=1, max_length=1024)
+
+
+class QQMessageWindowUpdate(BaseModel):
+    seconds: float = Field(ge=0, le=30, allow_inf_nan=False)

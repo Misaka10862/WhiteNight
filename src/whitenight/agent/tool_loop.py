@@ -28,6 +28,12 @@ from whitenight.tools.pending import PendingToolStore
 logger = logging.getLogger(__name__)
 
 
+def approval_prompt(tool_name: str, code: str | None) -> str:
+    if tool_name == "file.move":
+        return "文件移动需要审批，直接回复“同意”即可确认；有多项待审批时需先选择。"
+    return f"操作 {tool_name} 需要审批。请回复：同意 {code}，或：拒绝 {code}。"
+
+
 def tool_invoker(
     executor: ToolExecutor,
     session_id: str,
@@ -181,10 +187,7 @@ class ToolLoopRunner:
                             params=pending_params,
                             assistant_content="".join(turn_parts),
                         )
-                        approval_lines.append(
-                            f"操作 {call.name} 需要审批。请回复：同意 "
-                            f"{outcome.approval_code}，或：拒绝 {outcome.approval_code}。"
-                        )
+                        approval_lines.append(approval_prompt(call.name, outcome.approval_code))
                     reply = (
                         "".join(text_parts).strip() + "\n\n" + "\n".join(approval_lines)
                     ).strip()

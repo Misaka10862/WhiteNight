@@ -5,6 +5,44 @@
 
 Last update: 2026-09-04 (architecture hardening implemented and verified)
 
+## 2026-09-08 plain file-move confirmation
+
+- Diagnosis: the existing OneBot contract test reproduces a deterministic requirement
+  to include a one-time code even for a single pending file move. This is a program
+  interaction constraint, not an LLM understanding or tool-selection limitation.
+- QQ and Web chat now accept plain Chinese confirmation for exactly one
+  pending `file.move` in the current session and channel. Ambiguous queues require
+  explicit selection; other operations retain their existing approval flow.
+- Confirmation reuses the stored approval and continuation. Policy checks, parameter
+  binding, channel/recipient checks, expiry, one-time consumption and auditing remain
+  in effect. Move prompts explain plain confirmation without requiring a typed code.
+- Validation: 339 Python tests pass (4 optional integration tests skipped), including
+  a real file move, cross-session isolation, replay prevention and ambiguous queues.
+  Ruff, strict mypy, tracked-secret scanning, 13 Web tests, lint and production build
+  pass. Technical English audit passes after removing a Chinese literal from this note.
+
+## 2026-09-04 local educational architecture atlas
+
+- Created a separate, offline-only educational guide under the already ignored
+  `data/architecture-guide/` directory. It is not a WhiteNight runtime service.
+- The self-contained HTML covers seven architectural areas, 21 modules, nested
+  component diagrams, four explanatory journeys and 236 exact source snapshots.
+- Static dependency diagrams are explicitly distinguished from execution order;
+  source pages include line numbers, symbol navigation and internal import links.
+- All 340 routes, embedded source hashes/text and offline resource boundaries were
+  checked. No server, deployment, remote commit or push was created for this task.
+- This progress note remains local and uncommitted, as requested for the guide.
+- Local guide layout repair: home edge labels were wider than the 22-pixel card
+  gaps and painted below cards, causing deterministic text occlusion. Moved home
+  relationship explanations into a responsive, normal-flow list below the graph;
+  arrow paths and module navigation remain available. The regression check and
+  all 340 route/source checks pass. The regenerated guide remains ignored by Git.
+- Follow-up presentation change: all diagram card backgrounds, including highlighted
+  cards, now use translucent fills while their own text remains fully opaque.
+  Relationship labels return inline across every diagram, with darker text for
+  legibility; the home-only detached explanation list has been removed. The local
+  guide was regenerated and its complete route/source checks pass; no Git commit.
+
 ## 2026-09-04 architecture hardening
 
 - The accepted implementation plan retains a single process and introduces incremental
@@ -461,3 +499,48 @@ uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
   submission, while ordinary coding requests remain local.
 - Removed the WebUI constraints editor and its SOUL/AGENTS file API. Character and persona edits
   remain on the Characters page; `AGENTS.md` remains local engineering metadata.
+
+## 2026-09-09 — QQ poke notices and message collection window (0.1.0)
+
+- Root cause: deterministic adapter filtering, not LLM comprehension. A minimal
+  `notice/notify/poke` envelope validates but the previous non-message filter drops
+  it before model invocation. Normalize private owner-to-bot poke notices, preserve
+  replay deduplication, and ignore group notices, bot echoes, and other targets.
+- Collect QQ messages in a fixed window starting with the first arrival (default
+  2 seconds). One model reply consumes ordered message context; earlier images and
+  received files remain in conversation history. Approval commands bypass the
+  window; explicit commands remain separate. Zero disables collection.
+- WebUI Models → QQ / OneBot exposes a validated 0–30 second setting, persisted
+  as `qq_message_window_seconds` and applied immediately to new windows.
+- Webhooks acknowledge queued work immediately so a serial NapCat sender can deliver
+  subsequent messages during the window. Shutdown drains accepted events before
+  closing the chat service and database; disconnected callers do not cancel replies.
+- Existing uncommitted changes are included at the user's explicit request.
+  Python package, runtime and frontend package/lock versions already agree on 0.1.0.
+- Historical scheduler logs also contain model-provider DNS failures. These are
+  external connectivity failures, separate from the deterministic poke filtering bug.
+
+### Duplicate proactive message at 2026-09-08 20:20 CST
+
+- Attribution: deterministic delivery retry, not duplicate LLM composition. Local
+  logs show two HTTP 200 send calls at 20:20:27 and 20:20:29; encrypted audit records
+  show one 40-character message completed on `attempt=2` (12:20:29 UTC). The original
+  response body was not retained, so its exact business error cannot be recovered.
+- OneBot previously collapsed business/uncertain failures into `False`, prompting
+  the scheduler to resend after two seconds. Delivery errors now preserve certainty:
+  only connection-establishment/pool failures may retry. Read timeouts, HTTP 5xx,
+  malformed responses, business failures, and partial sends never trigger replay.
+- Successful delivery is separated from audit persistence: an audit write failure
+  is logged but cannot resend an already delivered message. This chooses avoiding
+  duplicate messages over automatic retry when delivery cannot be established.
+- Contract coverage reproduces ambiguous business responses, lost response timeouts,
+  server errors, and post-delivery audit failure without sending real QQ messages.
+
+### Validation
+
+- `./scripts/check.sh`: passed (350 tests passed, 4 environment-dependent tests
+  skipped; Ruff, strict mypy, credential scan, frontend lint/tests/build and
+  technical-English audit passed). Command/window ordering and shutdown drain
+  are covered by regression tests.
+- A live model-generation probe before restart hit a connection timeout. This
+  remains an external service/network health issue pending post-restart checks.

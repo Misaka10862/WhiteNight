@@ -317,3 +317,36 @@ def test_slow_sender_keeps_event_loop_responsive(engine: Engine, tmp_path) -> No
 def test_invalid_quiet_time_rejected(value: str) -> None:
     with pytest.raises(ValueError):
         _config(quiet_start=value)
+
+
+@pytest.mark.parametrize("failure", ["business", "timeout", "server"])
+def test_uncertain_onebot_delivery_is_not_replayed(engine: Engine, tmp_path, failure) -> None:
+    import httpx
+
+    from whitenight.channels.onebot import OneBotSender
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("reply lost after delivery", request=request)
+        if failure == "server":
+            return httpx.Response(500)
+        return httpx.Response(200, json={"status": "failed", "retcode": 1200})
+
+    sender = OneBotSender("http://mock", transport=httpx.MockTransport(handler))
+    service, _ = _service(engine, tmp_path, sender=sender, qq_owner_ids=[10001])
+    assert asyncio.run(service._send_with_retries("hello")) is False
+    assert len(calls) == 1
+
+
+def test_successful_delivery_audit_failure_never_resends(engine: Engine, tmp_path) -> None:
+    class FailingAudit:
+        def record(self, **kwargs):
+            raise RuntimeError("audit unavailable")
+
+    service, sender = _service(engine, tmp_path)
+    service._audit = FailingAudit()
+    assert asyncio.run(service._send_with_retries("hello")) is True
+    assert sender.messages == ["hello"]

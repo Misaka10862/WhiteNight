@@ -79,5 +79,7 @@ qq_enabled: false
 qq_owner_ids: []                # Example: [10001]
 qq_onebot_api_url: http://127.0.0.1:3000
 qq_rate_limit_seconds: 2.0
+# Fixed collection window from the first message; 0 disables batching.
+qq_message_window_seconds: 2.0
 qq_reply_max_chars: 4000
 qq_file_send_max_bytes: 104857600

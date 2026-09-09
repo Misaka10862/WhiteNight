@@ -608,3 +608,6 @@ export async function downloadBackup(id: string): Promise<void> {
   anchor.click()
   URL.revokeObjectURL(url)
 }
+
+export const fetchQQMessageWindow = () => jsonFetch<{ seconds: number }>('/api/v1/onebot/config')
+export const updateQQMessageWindow = (seconds: number) => jsonFetch<{ seconds: number }>('/api/v1/onebot/config', { method: 'PUT', body: JSON.stringify({ seconds }) })

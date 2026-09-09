@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Literal
@@ -23,7 +24,7 @@ from whitenight.agent.files import (
     _MAX_ORCHESTRATED_FILE_SENDS,
     FileTaskCoordinator,
 )
-from whitenight.agent.tool_loop import ToolLoopRunner, tool_invoker
+from whitenight.agent.tool_loop import ToolLoopRunner, approval_prompt, tool_invoker
 from whitenight.channels.types import (
     ChannelContext,
     ChatEvent,
@@ -212,6 +213,31 @@ class ChatService:
             self._proactive.mark_activity()
         yield ChatEvent(type="start", session_id=session_id)
 
+        if (
+            trusted_channel.channel == "web"
+            and not request.image_data_url
+            and not request.attachment_ids
+            and re.fullmatch(r"(?:同意|批准|允许|允许操作)[！!。.]?", request.text.strip())
+            and self._approvals is not None
+        ):
+            pending = [
+                item
+                for item in self._approvals.list_pending()
+                if item.session_id == session_id and item.channel == trusted_channel.channel
+            ]
+            if len(pending) == 1 and pending[0].tool_name == "file.move":
+                for event in await self.resume_approval(pending[0].code, trusted_channel):
+                    yield event
+                return
+            reply = (
+                "当前没有有效的待审批文件移动。"
+                if not pending
+                else "请在审批面板中选择要批准的操作。"
+            )
+            message = self._persist_assistant(session_id, reply)
+            yield ChatEvent(type="done", session_id=session_id, message_id=message.id, text=reply)
+            return
+
         plan = await self._router.route(request.text, has_image=image_path is not None)
         codex_prompt = extract_codex_prompt(request.text)
         if codex_prompt == "":
@@ -354,8 +380,7 @@ class ChatService:
                         reply = (
                             f"已定位附件：{attachment_path.name}\n"
                             f"目标目录：{destination_dir}\n\n"
-                            f"操作 file.move 需要审批。请回复：同意 {move_outcome.approval_code}，"
-                            f"或：拒绝 {move_outcome.approval_code}。"
+                            + approval_prompt("file.move", move_outcome.approval_code)
                         )
                     else:
                         reply = move_outcome.message
@@ -711,10 +736,7 @@ class ChatService:
                             params=pending_params,
                             assistant_content="".join(turn_parts),
                         )
-                        approval_lines.append(
-                            f"操作 {call.name} 需要审批。请回复：同意 "
-                            f"{outcome.approval_code}，或：拒绝 {outcome.approval_code}。"
-                        )
+                        approval_lines.append(approval_prompt(call.name, outcome.approval_code))
                     approval_text = "\n".join(approval_lines)
                     reply = "".join(text_parts).strip()
                     reply = f"{reply}\n\n{approval_text}".strip()

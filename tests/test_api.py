@@ -170,3 +170,15 @@ def test_model_list_uses_temporary_cloud_key_without_persisting(
     }
     assert "temporary-secret" not in response.text
     assert client.app.state.credentials.get("com.whitenight.credentials", "openai_api_key") is None
+
+
+def test_qq_window_configuration(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "runtime.yaml"
+    monkeypatch.setenv("WHITENIGHT_CONFIG", str(config))
+    assert client.get("/api/v1/onebot/config").json() == {"seconds": 2.0}
+    response = client.put("/api/v1/onebot/config", json={"seconds": 0.5})
+    assert response.status_code == 200
+    assert yaml.safe_load(config.read_text())["qq_message_window_seconds"] == 0.5
+    assert client.get("/api/v1/onebot/config").json() == {"seconds": 0.5}
+    for seconds in [-1, 31]:
+        assert client.put("/api/v1/onebot/config", json={"seconds": seconds}).status_code == 422

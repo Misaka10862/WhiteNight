@@ -27,6 +27,7 @@ from whitenight.api.schemas import (
     ModelKeepAliveUpdate,
     ModelListRequest,
     ModelProviderUpdate,
+    QQMessageWindowUpdate,
     SessionRename,
     TokenizerPathUpdate,
 )
@@ -603,7 +604,17 @@ def create_app(
     @app.post("/api/v1/onebot/events")
     async def onebot_events(payload: dict[str, object]) -> dict[str, object]:
         adapter: OneBotAdapter = app.state.onebot_adapter
-        return await adapter.handle_event(payload)
+        return adapter.submit_event(payload)
+
+    @app.get("/api/v1/onebot/config")
+    async def qq_message_config() -> dict[str, object]:
+        return {"seconds": settings.qq_message_window_seconds}
+
+    @app.put("/api/v1/onebot/config")
+    async def update_qq_message_config(payload: QQMessageWindowUpdate) -> dict[str, object]:
+        _persist_config_values({"qq_message_window_seconds": payload.seconds})
+        settings.qq_message_window_seconds = payload.seconds
+        return {"seconds": payload.seconds, "persisted": True}
 
     @app.get("/api/v1/onebot/status")
     async def onebot_status() -> dict[str, object]:

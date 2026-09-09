@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol
 
 from whitenight.agent.context import load_soul
+from whitenight.channels.types import ChannelDeliveryError
 from whitenight.config import Settings
 from whitenight.memory.service import MemoryService
 from whitenight.models.base import ModelProvider, ProviderMessage
@@ -294,40 +295,48 @@ class ProactiveService:
                 if await asyncio.to_thread(self._sender.send, message, metadata):
                     self._last_delivery_error = None
                     if self._audit:
-                        self._audit.record(
-                            actor="scheduler",
-                            action="proactive.sent",
-                            decision="auto",
-                            params_summary=(
-                                f"channel={channel} user_id={owner_user_id} "
-                                f"message_chars={len(message)} "
-                                f"message_sha256={hashlib.sha256(message.encode('utf-8')).hexdigest()} "
-                                f"attempt={attempt}"
-                            ),
-                            result_summary="主动消息发送成功（不含正文）",
-                            channel=channel,
-                        )
+                        try:
+                            self._audit.record(
+                                actor="scheduler",
+                                action="proactive.sent",
+                                decision="auto",
+                                params_summary=(
+                                    f"channel={channel} user_id={owner_user_id} "
+                                    f"message_chars={len(message)} "
+                                    f"message_sha256={hashlib.sha256(message.encode('utf-8')).hexdigest()} "
+                                    f"attempt={attempt}"
+                                ),
+                                result_summary="主动消息发送成功（不含正文）",
+                                channel=channel,
+                            )
+                        except Exception:
+                            logger.exception("主动消息已发送，但审计写入失败；不会重发")
                     return True
             except Exception as exc:
                 self._last_delivery_error = type(exc).__name__
                 logger.warning(
                     "主动消息发送失败 attempt=%s error_type=%s", attempt, type(exc).__name__
                 )
+                if not isinstance(exc, ChannelDeliveryError) or not exc.retry_safe:
+                    break
             if attempt < max_attempts:
                 await asyncio.sleep(2 * attempt)
         if self._audit:
-            self._audit.record(
-                actor="scheduler",
-                action="proactive.failed",
-                decision="error",
-                params_summary=(
-                    f"channel={channel} user_id={owner_user_id} message_chars={len(message)} "
-                    f"message_sha256={hashlib.sha256(message.encode('utf-8')).hexdigest()} "
-                    f"attempts={max_attempts}"
-                ),
-                result_summary=f"主动消息发送失败：{self._last_delivery_error or 'sender returned false'}",
-                channel=channel,
-            )
+            try:
+                self._audit.record(
+                    actor="scheduler",
+                    action="proactive.failed",
+                    decision="error",
+                    params_summary=(
+                        f"channel={channel} user_id={owner_user_id} message_chars={len(message)} "
+                        f"message_sha256={hashlib.sha256(message.encode('utf-8')).hexdigest()} "
+                        f"attempts={attempt}"
+                    ),
+                    result_summary=f"主动消息发送失败：{self._last_delivery_error or 'sender returned false'}",
+                    channel=channel,
+                )
+            except Exception:
+                logger.exception("主动消息失败审计写入失败；继续重新调度")
         return False
 
     async def run_forever(self, stop: asyncio.Event, interval_s: int = 30) -> None:

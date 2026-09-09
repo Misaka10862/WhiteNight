@@ -10,10 +10,12 @@ from typing import cast
 
 import httpx
 
+from whitenight.channels.types import ChannelDeliveryError
+
 logger = logging.getLogger(__name__)
 
 
-class OneBotSendError(RuntimeError):
+class OneBotSendError(ChannelDeliveryError):
     """OneBot API 发送失败。"""
 
 
@@ -64,7 +66,12 @@ class OneBotSender:
             return 0
         sent = 0
         for chunk in split_text(text, self.reply_max_chars):
-            self._post("/send_private_msg", json={"user_id": user_id, "message": chunk})
+            try:
+                self._post("/send_private_msg", json={"user_id": user_id, "message": chunk})
+            except OneBotSendError as exc:
+                if sent:
+                    raise OneBotSendError("OneBot partial delivery; do not replay") from exc
+                raise
             sent += 1
         return sent
 
@@ -267,19 +274,19 @@ class OneBotSender:
             except httpx.HTTPError as exc:
                 last_error = str(exc)
                 self._last_error = f"{type(exc).__name__}: {last_error[:200]}"
-                if attempt < self.max_attempts:
+                safe = isinstance(
+                    exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+                )
+                if safe and attempt < self.max_attempts:
                     time.sleep(0.5 * attempt)
                     continue
-                break
+                raise OneBotSendError("OneBot transport failed", retry_safe=safe) from exc
 
             body = response.text[:1000]
             if response.status_code >= 500:
                 last_error = f"HTTP {response.status_code}: {body}"
                 self._last_error = f"HTTP {response.status_code}"
-                if attempt < self.max_attempts:
-                    time.sleep(0.5 * attempt)
-                    continue
-                break
+                raise OneBotSendError("OneBot server response uncertain")
             if response.status_code != 200:
                 self._last_error = f"HTTP {response.status_code}"
                 raise OneBotSendError(f"HTTP {response.status_code}: {body}")
@@ -300,7 +307,5 @@ class OneBotSender:
         user_id = metadata.get("user_id")
         if not isinstance(user_id, int) or user_id <= 0:
             return False
-        try:
-            return self.send_private_message(user_id, message) > 0
-        except OneBotSendError:
-            return False
+        # Preserve uncertainty for the scheduler; False previously triggered a blind resend.
+        return self.send_private_message(user_id, message) > 0

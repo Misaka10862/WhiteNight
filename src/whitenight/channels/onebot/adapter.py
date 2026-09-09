@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
+import json
 import logging
 import mimetypes
 import re
@@ -30,6 +32,7 @@ from whitenight.personality.store import PersonalityStore
 from whitenight.policy.approvals import ApprovalService
 from whitenight.policy.audit import AuditService
 from whitenight.stickers.catalog import StickerCatalog
+from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -106,6 +109,9 @@ class OneBotAdapter:
         self._dedupe = EventDeduplicator()
         self._rate = RateLimiter(settings.qq_rate_limit_seconds)
         self._locks: dict[int, asyncio.Lock] = {}
+        self._inflight: set[asyncio.Task[dict[str, object]]] = set()
+        self._pending: dict[int, list[OneBotPrivateMessageEvent]] = {}
+        self._workers: dict[int, asyncio.Task[dict[str, object]]] = {}
 
     def enabled(self) -> bool:
         return self._settings.qq_enabled
@@ -113,10 +119,45 @@ class OneBotAdapter:
     def owner_ids(self) -> list[int]:
         return list(self._settings.qq_owner_ids)
 
+    def submit_event(self, payload: dict[str, object]) -> dict[str, object]:
+        if not self.enabled():
+            return {"status": "qq_disabled"}
+        task = asyncio.create_task(self.handle_event(payload))
+        self._inflight.add(task)
+        task.add_done_callback(self._event_finished)
+        return {"status": "accepted"}
+
+    def _event_finished(self, task: asyncio.Task[dict[str, object]]) -> None:
+        self._inflight.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("QQ 事件处理失败 error_type=%s", type(task.exception()).__name__)
+
+    async def close(self) -> None:
+        if self._inflight:
+            await asyncio.gather(*self._inflight, return_exceptions=True)
+
     async def handle_event(self, payload: dict[str, object]) -> dict[str, object]:
         if not self.enabled():
             return {"status": "qq_disabled"}
 
+        if payload.get("post_type") == "notice":
+            if payload.get("notice_type") != "notify" or payload.get("sub_type") != "poke":
+                return {"status": "ignored_post_type"}
+            if payload.get("group_id"):
+                return {"status": "ignored_group"}
+            if not payload.get("self_id") or payload.get("target_id") != payload.get("self_id"):
+                return {"status": "ignored_poke_target"}
+            if payload.get("user_id") == payload.get("self_id"):
+                return {"status": "ignored_poke_target"}
+            identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            payload = {
+                **payload,
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": f"poke:{identity}",
+                "raw_message": "",
+                "message": [{"type": "poke", "data": {"type": "戳一戳"}}],
+            }
         try:
             event = OneBotPrivateMessageEvent.model_validate(payload)
         except ValidationError as exc:
@@ -140,18 +181,111 @@ class OneBotAdapter:
         if not self._dedupe.accept(str(event.message_id), user_id):
             return {"status": "duplicate"}
 
-        raw_text = event.raw_message.strip()
-        if _APPROVE_RE.match(raw_text) or _REJECT_RE.match(raw_text):
+        raw_text = parse_segments(event).text.strip()
+        if (
+            _APPROVE_RE.match(raw_text)
+            or _REJECT_RE.match(raw_text)
+            or _APPROVAL_WITHOUT_CODE_RE.match(raw_text)
+        ):
             return await self._process_owner_message(event)
+        if parse_segments(event).empty:
+            return {"status": "ignored_empty"}
+        # Commands are barriers; approvals above must remain available during tool waits.
+        if raw_text.startswith("/") or self._settings.qq_message_window_seconds == 0:
+            self._pending.pop(user_id, None)
+            previous = self._workers.get(user_id)
+            worker = asyncio.create_task(self._process_separate(event, previous))
+            self._workers[user_id] = worker
+            return await asyncio.shield(worker)
+        if user_id in self._pending:
+            self._pending[user_id].append(event)
+            worker = self._workers[user_id]
+        else:
+            batch = [event]
+            self._pending[user_id] = batch
+            worker = asyncio.create_task(
+                self._flush_batch(user_id, batch, self._workers.get(user_id))
+            )
+            self._workers[user_id] = worker
+        return await asyncio.shield(worker)
 
-        lock = self._locks.setdefault(user_id, asyncio.Lock())
-        async with lock:
-            delay = self._rate.wait_seconds(user_id)
-            if delay > 0:
-                await asyncio.sleep(delay)
-            return await self._process_owner_message(event)
+    async def _process_separate(
+        self,
+        event: OneBotPrivateMessageEvent,
+        previous: asyncio.Task[dict[str, object]] | None,
+    ) -> dict[str, object]:
+        try:
+            if previous is not None:
+                await asyncio.shield(asyncio.gather(previous, return_exceptions=True))
+            async with self._locks.setdefault(event.user_id, asyncio.Lock()):
+                delay = self._rate.wait_seconds(event.user_id)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                return await self._process_owner_message(event)
+        finally:
+            if self._workers.get(event.user_id) is asyncio.current_task():
+                self._workers.pop(event.user_id, None)
 
-    async def _process_owner_message(self, event: OneBotPrivateMessageEvent) -> dict[str, object]:
+    async def _flush_batch(
+        self,
+        user_id: int,
+        batch: list[OneBotPrivateMessageEvent],
+        previous: asyncio.Task[dict[str, object]] | None,
+    ) -> dict[str, object]:
+        try:
+            await asyncio.sleep(self._settings.qq_message_window_seconds)
+            if self._pending.get(user_id) is batch:
+                self._pending.pop(user_id, None)
+            if previous is not None:
+                await asyncio.shield(asyncio.gather(previous, return_exceptions=True))
+            async with self._locks.setdefault(user_id, asyncio.Lock()):
+                delay = self._rate.wait_seconds(user_id)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                if len(batch) == 1:
+                    return await self._process_owner_message(batch[0])
+                requests: list[ChatRequest] = []
+                result: dict[str, object] = {"status": "ignored_empty"}
+                for event in batch:
+                    result = await self._process_owner_message(event, requests)
+                if not requests:
+                    return result
+                last = requests[-1]
+                # Preserve each earlier image in conversation history for visual context.
+                for request in requests[:-1]:
+                    if request.image_data_url:
+                        path, mime = save_image_data_url(
+                            request.image_data_url,
+                            self._settings.data_dir / "attachments",
+                            self._settings.max_image_bytes,
+                        )
+                        self._sessions.add_message(
+                            session_id=last.session_id,
+                            role="user",
+                            content=request.text,
+                            kind="image",
+                            image_path=path,
+                            image_mime=mime,
+                        )
+                combined = last.model_copy(
+                    update={
+                        "text": "\n\n".join(
+                            f"[消息 {index}]\n{request.text}"
+                            for index, request in enumerate(requests, 1)
+                        )
+                    }
+                )
+                logger.info("QQ 消息合并 count=%s", len(batch))
+                return await self._reply(combined, user_id)
+        finally:
+            if self._pending.get(user_id) is batch:
+                self._pending.pop(user_id, None)
+            if self._workers.get(user_id) is asyncio.current_task():
+                self._workers.pop(user_id, None)
+
+    async def _process_owner_message(
+        self, event: OneBotPrivateMessageEvent, requests: list[ChatRequest] | None = None
+    ) -> dict[str, object]:
         parsed = parse_segments(event)
         logger.info(
             "QQ 私聊处理 user_id=%s message_id=%s segments=%s poke=%s text_length=%s",
@@ -227,7 +361,12 @@ class OneBotAdapter:
                 self._sessions.record_attachment_message(
                     session_id, saved["name"], channel="onebot", path=Path(saved["path"])
                 )
-                await self._send(event.user_id, f"收到文件：{saved['name']}（{saved['path']}）")
+                if requests is not None:
+                    requests.append(
+                        ChatRequest(session_id=session_id, text=f"（收到文件：{saved['name']}）")
+                    )
+                else:
+                    await self._send(event.user_id, f"收到文件：{saved['name']}（{saved['path']}）")
             else:
                 reason = self._file_receive_failure_reason(parsed)
                 self._sessions.record_attachment_message(
@@ -236,7 +375,10 @@ class OneBotAdapter:
                     channel="onebot",
                     error=reason,
                 )
-                await self._send(event.user_id, reason)
+                if requests is not None:
+                    requests.append(ChatRequest(session_id=session_id, text=reason))
+                else:
+                    await self._send(event.user_id, reason)
                 return {"status": "file_failed", "session_id": session_id}
             return {"status": "file_received", "session_id": session_id}
 
@@ -267,12 +409,18 @@ class OneBotAdapter:
             text=request_text,
             image_data_url=image_data_url,
         )
+        if requests is not None:
+            requests.append(request)
+            return {"status": "prepared", "session_id": session_id}
+        return await self._reply(request, event.user_id)
+
+    async def _reply(self, request: ChatRequest, owner_user_id: int) -> dict[str, object]:
+        session_id = request.session_id
         reply: str | None = None
         sticker_ids: list[str] = []
         task_note_sent = False
-        owner_user_id = event.user_id
         async for chat_event in self._chat.stream_reply(
-            request, ChannelContext(channel="onebot", target=str(event.user_id))
+            request, ChannelContext(channel="onebot", target=str(owner_user_id))
         ):
             if chat_event.type == "task" and not task_note_sent:
                 delegate = (chat_event.extra or {}).get("delegate_event", {})
@@ -406,6 +554,10 @@ class OneBotAdapter:
                 ]
                 if len(pending) == 1:
                     code = pending[0].code
+                    if pending[0].tool_name == "file.move":
+                        return await self._handle_approval_command(
+                            event, f"同意 {code}", session_id
+                        )
                     await self._send(
                         event.user_id,
                         f"审批必须带一次性编号。请回复：同意 {code}，或：拒绝 {code}。",

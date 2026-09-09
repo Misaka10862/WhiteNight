@@ -510,6 +510,51 @@ def test_recent_qq_attachment_move_gets_deterministic_approval(
     assert len(approvals.list_pending()) == 1
 
 
+def test_plain_confirmation_moves_file_once(engine, settings, tmp_path):
+    from whitenight.agent.service import DummyProvider
+
+    source = tmp_path / "source.txt"
+    destination = tmp_path / "moved.txt"
+    source.write_text("keep contents", encoding="utf-8")
+    service, store, approvals = _service(
+        engine, settings, DummyProvider("移动完成"), [FileMoveTool()]
+    )
+    session = store.create_session()
+    params = {"source": str(source), "destination": str(destination)}
+    outcome = service._tool_executor.execute(
+        "file.move", params, session_id=session.id, channel="web"
+    )
+    assert outcome.status == "waiting_approval"
+    service._pending_tools.create(
+        approval_id=outcome.approval_id,
+        session_id=session.id,
+        channel="web",
+        channel_target=None,
+        tool_call_id="move-plain",
+        tool_name="file.move",
+        params=outcome.metadata.get("prepared_params", params),
+        assistant_content="",
+    )
+
+    async def confirm(session_id):
+        return [
+            event
+            async for event in service.stream_reply(ChatRequest(session_id=session_id, text="同意"))
+        ]
+
+    # A confirmation in another conversation must not authorize this move.
+    asyncio.run(confirm(store.create_session().id))
+    assert source.exists() and not destination.exists()
+    assert len(approvals.list_pending()) == 1
+    events = asyncio.run(confirm(session.id))
+    assert any(event.type == "tool" and event.extra["status"] == "ok" for event in events)
+    assert not source.exists()
+    assert destination.read_text() == "keep contents"
+    assert not approvals.list_pending()
+    replay = asyncio.run(confirm(session.id))
+    assert not any(event.type == "tool" for event in replay)
+
+
 def test_chat_accepts_parallel_tool_calls_and_returns_each_result(engine, settings, tmp_path):
     first = tmp_path / "first.txt"
     second = tmp_path / "second.txt"

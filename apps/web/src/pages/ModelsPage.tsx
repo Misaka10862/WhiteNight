@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchAvailableModels,
+  fetchQQMessageWindow,
+  updateQQMessageWindow,
   fetchModelConfig,
   fetchSystemHealth,
   restartService,
@@ -22,6 +24,12 @@ const KEEP_ALIVE_LABELS: Record<string, string> = {
 
 export default function ModelsPage() {
   const queryClient = useQueryClient()
+  const qqWindow = useQuery({ queryKey: ['qq-window'], queryFn: fetchQQMessageWindow })
+  const [windowSeconds, setWindowSeconds] = useState<number | null>(null)
+  const saveWindow = useMutation({
+    mutationFn: updateQQMessageWindow,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['qq-window'] }),
+  })
   const health = useQuery({ queryKey: ['system-health'], queryFn: fetchSystemHealth, refetchInterval: 15000 })
   const modelConfig = useQuery({ queryKey: ['model-config'], queryFn: fetchModelConfig })
   const [keepAlive, setKeepAlive] = useState('')
@@ -230,6 +238,12 @@ export default function ModelsPage() {
       </div>
       <div className="panel">
         <h3>QQ / OneBot</h3>
+        <label>消息合并窗口（秒）<input type="number" min="0" max="30" step="0.1" value={windowSeconds ?? qqWindow.data?.seconds ?? 2} onChange={(event) => setWindowSeconds(event.target.valueAsNumber)} /></label>
+        <p className="muted">从首条消息起收集窗口内的连续消息，统一回复。默认 2 秒，0 表示关闭；保存后立即生效。</p>
+        <button disabled={saveWindow.isPending || windowSeconds === null || !Number.isFinite(windowSeconds) || windowSeconds < 0 || windowSeconds > 30} onClick={() => saveWindow.mutate(windowSeconds ?? 2)}>保存合并窗口</button>
+        {saveWindow.isSuccess && <p>已保存</p>}
+        {saveWindow.isError && <div className="chat-error">保存失败：{String(saveWindow.error)}</div>}
+
         <p className="muted">
           状态：{health.data?.onebot?.health?.logged_in ? '在线并已登录' : health.data?.onebot?.health?.reason === 'connection_refused' ? '离线（NapCat 未启动）' : '未确认'}
         </p>

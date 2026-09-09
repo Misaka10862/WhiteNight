@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     qq_owner_ids: list[int] = Field(default_factory=list)  # 所有者 QQ 号白名单
     qq_onebot_api_url: str = "http://127.0.0.1:3000"
     qq_rate_limit_seconds: float = 2.0
+    qq_message_window_seconds: float = Field(default=2.0, ge=0, le=30, allow_inf_nan=False)
     qq_reply_max_chars: int = 4000
     qq_file_send_max_bytes: int = 100 * 1024 * 1024
 

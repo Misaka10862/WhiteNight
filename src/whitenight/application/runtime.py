@@ -283,6 +283,7 @@ async def runtime_lifespan(
             for task in list(_app.state.control_tasks):
                 task.cancel()
             await asyncio.gather(*_app.state.control_tasks, return_exceptions=True)
+            await onebot_adapter.close()
             await chat_service.close()
             if hermes_adapter is not None:
                 await hermes_adapter.close()
