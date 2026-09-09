@@ -523,7 +523,7 @@ uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
 ### Duplicate proactive message at 2026-09-08 20:20 CST
 
 - Attribution: deterministic delivery retry, not duplicate LLM composition. Local
-  logs show two HTTP 200 send calls at 20:20:27 and 20:20:29; encrypted audit records
+  logs show two HTTP 200 send calls at 20:20:27 and 20:20:29; audit records
   show one 40-character message completed on `attempt=2` (12:20:29 UTC). The original
   response body was not retained, so its exact business error cannot be recovered.
 - OneBot previously collapsed business/uncertain failures into `False`, prompting
@@ -544,3 +544,12 @@ uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
   are covered by regression tests.
 - A live model-generation probe before restart hit a connection timeout. This
   remains an external service/network health issue pending post-restart checks.
+
+- Post-restart verification: launchd started a new service process; health endpoint
+  and WebUI returned HTTP 200, database was reachable, QQ was logged in, Codex MCP
+  was available, and the proactive scheduler was enabled with a next candidate.
+  Hermes remained intentionally disabled by configuration. Live model generation
+  returned a nonempty two-character response; the earlier timeout did not recur.
+  Runtime version is 0.1.0 and the active QQ collection window is 2.0 seconds.
+- Poke and duplicate-delivery regressions use controlled contract transports; no
+  synthetic messages were sent to the real QQ account during verification.
