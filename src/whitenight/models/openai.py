@@ -7,6 +7,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 
 import httpx
+from pydantic import BaseModel, Field, ValidationError
 
 from whitenight.models.base import (
     ModelCapabilities,
@@ -18,6 +19,31 @@ from whitenight.models.base import (
 )
 
 _TOOL_NAME_MAX_LENGTH = 64
+
+
+class _FunctionDelta(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class _ToolCallDelta(BaseModel):
+    index: int = Field(ge=0, strict=True)
+    id: str | None = None
+    function: _FunctionDelta | None = None
+
+
+class _StreamDelta(BaseModel):
+    content: str | None = None
+    tool_calls: list[_ToolCallDelta] | None = None
+
+
+class _StreamChoice(BaseModel):
+    delta: _StreamDelta | None = None
+    finish_reason: str | None = None
+
+
+class _StreamPayload(BaseModel):
+    choices: list[_StreamChoice]
 
 
 def _image_data_url(image: str, mime: str | None = None) -> str:
@@ -186,38 +212,77 @@ class OpenAIProvider:
             if response.status_code >= 400:
                 raise ModelProviderError.http_failure(response.status_code)
             calls: dict[int, dict[str, str]] = {}
+            completed = False
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
                 raw = line[5:].strip()
                 if raw == "[DONE]":
+                    completed = True
                     break
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
+                    raise ModelProviderError(
+                        "模型服务返回了无效的流式数据", category="protocol_error"
+                    ) from None
+                if isinstance(data, dict) and "error" in data:
+                    raise ModelProviderError("模型服务报告生成失败", category="provider_error")
+                try:
+                    payload_chunk = _StreamPayload.model_validate(data)
+                except ValidationError:
+                    raise ModelProviderError(
+                        "模型服务返回了无效的流式数据", category="protocol_error"
+                    ) from None
+                if not payload_chunk.choices:  # Optional usage-only chunk.
                     continue
-                delta_payload = (data.get("choices") or [{}])[0].get("delta") or {}
-                delta = delta_payload.get("content") or ""
-                if delta:
-                    yield ModelChunk(delta=delta)
-                for raw_call in delta_payload.get("tool_calls") or []:
-                    index = int(raw_call.get("index", 0))
-                    state = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                    state["id"] += str(raw_call.get("id") or "")
-                    function = raw_call.get("function") or {}
-                    state["name"] += str(function.get("name") or "")
-                    state["arguments"] += str(function.get("arguments") or "")
+                choice = payload_chunk.choices[0]
+                if choice.finish_reason is not None:
+                    if choice.finish_reason == "length":
+                        raise ModelProviderError(
+                            "模型输出达到长度上限，生成未完成", category="output_truncated"
+                        )
+                    if choice.finish_reason == "content_filter":
+                        raise ModelProviderError(
+                            "模型服务过滤了输出，生成未完成", category="content_filtered"
+                        )
+                    if choice.finish_reason not in {"stop", "tool_calls"}:
+                        raise ModelProviderError(
+                            "模型服务返回了无法识别的完成状态", category="protocol_error"
+                        )
+                    completed = True
+                delta = choice.delta or _StreamDelta()
+                if delta.content:
+                    yield ModelChunk(delta=delta.content)
+                for raw_call in delta.tool_calls or []:
+                    state = calls.setdefault(
+                        raw_call.index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    state["id"] += raw_call.id or ""
+                    function = raw_call.function or _FunctionDelta()
+                    state["name"] += function.name or ""
+                    state["arguments"] += function.arguments or ""
+            if not completed:
+                raise ModelProviderError(
+                    "模型响应流提前结束，生成未完成", category="incomplete_stream"
+                )
             parsed_calls: list[ToolCall] = []
             for index, state in sorted(calls.items()):
                 try:
-                    arguments = json.loads(state["arguments"] or "{}")
+                    arguments = json.loads(state["arguments"])
                 except json.JSONDecodeError:
-                    arguments = {}
+                    raise ModelProviderError(
+                        "模型返回了无效的工具参数", category="invalid_tool_arguments"
+                    ) from None
+                if not isinstance(arguments, dict):
+                    raise ModelProviderError(
+                        "模型返回了无效的工具参数", category="invalid_tool_arguments"
+                    )
                 parsed_calls.append(
                     ToolCall(
                         id=state["id"] or f"openai-{index}",
                         name=wire_to_internal.get(state["name"], state["name"]),
-                        arguments=arguments if isinstance(arguments, dict) else {},
+                        arguments=arguments,
                     )
                 )
             yield ModelChunk(done=True, tool_calls=parsed_calls)

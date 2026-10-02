@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from whitenight.memory.service import MemoryService
+from whitenight.memory.service import MemoryMaintenanceError, MemoryService
 from whitenight.models.base import ModelProvider
 from whitenight.personality.store import PersonalityStore
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
@@ -89,6 +89,7 @@ class MemoryMaintenance:
             if not pending:
                 return 0
             session_id, target = pending[0]
+            stage = "load"
             try:
                 history = [
                     message
@@ -98,11 +99,14 @@ class MemoryMaintenance:
                 character_id = None
                 if self._personalities is not None:
                     character_id, _persona_id = self._personalities.session_identity(session_id)
+                stage = "extraction"
                 await self._memory.extract_and_store(history, session_id, character_id)
+                stage = "summary"
                 checkpoint = self._store.summary_checkpoint(session_id)
                 uncovered = [message for message in history if message.sequence > checkpoint]
                 if len(uncovered) >= 10:
                     await self._memory.summarize_session(history, session_id, self._provider)
+                stage = "completion"
                 self._store.complete_maintenance(session_id, target)
                 return 1
             except SessionNotFoundError:
@@ -112,7 +116,11 @@ class MemoryMaintenance:
             except Exception as exc:
                 self._store.defer_maintenance(session_id)
                 logger.warning(
-                    "记忆维护等待重试 session=%s error_type=%s", session_id, type(exc).__name__
+                    "记忆维护等待重试 session=%s stage=%s reason=%s error_type=%s",
+                    session_id,
+                    stage,
+                    exc.reason if isinstance(exc, MemoryMaintenanceError) else "unexpected_error",
+                    type(exc).__name__,
                 )
                 return 0
 

@@ -12,6 +12,15 @@ curl http://127.0.0.1:8765/api/v1/system/health
 
 - File: `data/logs/whitenight.log` (desensitized when writing)
 - WebUI: Workbench → Logs; API: `GET /api/v1/logs?lines=200`
+- URL credentials, queries and fragments are redacted in new logs and when reading older logs
+  through the API or diagnostics. Raw historical files are retained without rewriting.
+- Log viewers read a maximum 256 KiB suffix and return only complete lines within that budget;
+  oversized lines may therefore produce fewer results than requested. API disk reads run outside
+  the event loop.
+- Memory warnings include a fixed `reason`; maintenance retries also include `stage` (load,
+  extraction, summary or completion). An invalid result retains its checkpoint for the existing
+  background retry. Empty output, invalid JSON/schema, incomplete stream and transport/provider
+  failures are distinct symptoms; do not attribute all of them to model capability.
 
 ## Database migration and rollback
 

@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 from whitenight.config import load_settings
+from whitenight.logging_config import read_log_tail
 from whitenight.policy.approvals import ApprovalService
 from whitenight.storage.backup import database_path
 from whitenight.storage.engine import backend_of, build_engine, ping
@@ -80,9 +81,7 @@ def main() -> int:
 
     log_path = settings.data_dir / "logs" / "whitenight.log"
     if log_path.exists():
-        report["log_tail"] = "\n".join(
-            log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]
-        )
+        report["log_tail"] = read_log_tail(log_path, 20)
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

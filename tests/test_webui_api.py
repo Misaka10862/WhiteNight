@@ -99,3 +99,15 @@ def test_logs_endpoint(client: TestClient, settings) -> None:
     response = client.get("/api/v1/logs")
     assert response.status_code == 200
     assert (settings.data_dir / "logs" / "whitenight.log").exists()
+
+
+def test_logs_endpoint_redacts_existing_file_and_applies_line_limit(
+    client: TestClient, settings
+) -> None:
+    path = settings.data_dir / "logs" / "whitenight.log"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("old\nGET https://cdn.example/download?rkey=PRIVATE_KEY\nlatest\n")
+    response = client.get("/api/v1/logs", params={"lines": 2})
+    assert response.status_code == 200
+    assert response.text == "GET https://cdn.example/download?***\nlatest"
+    assert "PRIVATE_KEY" in path.read_text()

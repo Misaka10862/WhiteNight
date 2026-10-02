@@ -48,6 +48,7 @@ from whitenight.channels.types import (
 from whitenight.config import ConfigError, Settings, load_settings
 from whitenight.credentials.keychain import KeychainError
 from whitenight.delegates.manager import DelegateManager, TaskRecord, TaskStore
+from whitenight.logging_config import read_log_tail
 from whitenight.memory import (
     MemoryExtractor,
 )
@@ -672,9 +673,7 @@ def create_app(
     @app.get("/api/v1/logs", response_class=PlainTextResponse)
     async def read_logs(lines: int = Query(default=100, ge=1, le=1000)) -> str:
         path = settings.data_dir / "logs" / "whitenight.log"
-        if not path.exists():
-            return ""
-        return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+        return await asyncio.to_thread(read_log_tail, path, lines)
 
     @app.post("/api/v1/chat/{request_id}/cancel")
     async def cancel_chat(request_id: str) -> dict[str, object]:

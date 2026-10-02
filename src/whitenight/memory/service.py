@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from typing import Literal
 
 from whitenight.channels.types import MessageRecord
 from whitenight.memory.embeddings import EmbeddingProvider
@@ -31,6 +32,15 @@ def _normalize(value: str) -> str:
 
 class MemoryMaintenanceError(RuntimeError):
     """A failed maintenance pass must keep its unprocessed sequence range."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: Literal["extraction_failed", "invalid_sources", "summary_incomplete"],
+    ) -> None:
+        self.reason = reason
+        super().__init__(message)
 
 
 class MemoryService:
@@ -125,7 +135,9 @@ class MemoryService:
     ) -> dict[str, int]:
         result = await self._extractor.extract(messages)
         if not result.succeeded:
-            raise MemoryMaintenanceError("记忆提取未成功，保留待处理消息以便重试")
+            raise MemoryMaintenanceError(
+                "记忆提取未成功，保留待处理消息以便重试", reason="extraction_failed"
+            )
         source_ids = {message.id for message in messages}
         candidates: list[FactCandidate | EpisodeCandidate] = [*result.facts, *result.episodes]
         if any(
@@ -133,7 +145,7 @@ class MemoryService:
             or not set(candidate.source_message_ids).issubset(source_ids)
             for candidate in candidates
         ):
-            raise MemoryMaintenanceError("记忆候选缺少有效的来源消息")
+            raise MemoryMaintenanceError("记忆候选缺少有效的来源消息", reason="invalid_sources")
         facts_added = 0
         for candidate in result.facts:
             candidate.character_id = character_id
@@ -236,7 +248,9 @@ class MemoryService:
                         break
                 updated = "".join(parts).strip()
                 if not completed or not updated:
-                    raise MemoryMaintenanceError("摘要生成未完成，保留旧摘要和检查点")
+                    raise MemoryMaintenanceError(
+                        "摘要生成未完成，保留旧摘要和检查点", reason="summary_incomplete"
+                    )
                 summary = updated
                 self._store.set_session_summary(
                     session_id,

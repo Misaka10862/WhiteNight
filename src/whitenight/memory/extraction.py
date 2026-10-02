@@ -11,11 +11,21 @@ import logging
 import re
 from typing import ClassVar, Protocol
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 from whitenight.channels.types import MessageRecord
 from whitenight.memory.types import EpisodeCandidate, ExtractionResult, FactCandidate
-from whitenight.models.base import ModelProvider, ProviderMessage
+from whitenight.models.base import ModelProvider, ModelProviderError, ProviderMessage
 
 logger = logging.getLogger(__name__)
+
+
+class _ExtractionPayload(BaseModel):
+    """Model output has required data fields and cannot set internal success state."""
+
+    model_config = ConfigDict(extra="forbid")
+    facts: list[FactCandidate]
+    episodes: list[EpisodeCandidate]
 
 
 class MemoryExtractor(Protocol):
@@ -72,7 +82,8 @@ class OllamaMemoryExtractor:
         '"source_message_ids":["..."]}],'
         '"episodes":[{"content":"...","confidence":0.8,"importance":0.7,'
         '"source_message_ids":["..."]}]}\n'
-        "不要输出 JSON 以外的内容。没有可提取内容时输出空数组。"
+        '不要输出 JSON 以外的内容。没有可提取内容时输出 {"facts":[],"episodes":[]}。'
+        "source_message_ids 必须逐字复制对话中的消息 ID，不得编造。"
     )
 
     def __init__(self, provider: ModelProvider) -> None:
@@ -103,15 +114,35 @@ class OllamaMemoryExtractor:
                     break
             raw = "".join(text_parts)
             if not completed:
+                logger.warning("记忆提取失败 reason=incomplete_stream chars=%s", len(raw))
                 return ExtractionResult(succeeded=False)
-            match = re.search(r"\{.*\}", raw, re.S)
-            if not match:
-                logger.warning("记忆提取没有 JSON 输出 chars=%s", len(raw))
+            raw = raw.strip()
+            if not raw:
+                logger.warning("记忆提取失败 reason=empty_output chars=0")
                 return ExtractionResult(succeeded=False)
-            payload = json.loads(match.group(0))
-            return ExtractionResult.model_validate(payload)
+            fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n\s*```", raw, re.S | re.I)
+            if fenced:
+                raw = fenced.group(1)
+            payload = _ExtractionPayload.model_validate(json.loads(raw), strict=True)
+            return ExtractionResult(facts=payload.facts, episodes=payload.episodes)
+        except json.JSONDecodeError:
+            logger.warning("记忆提取失败 reason=invalid_json")
+            return ExtractionResult(succeeded=False)
+        except ValidationError:
+            logger.warning("记忆提取失败 reason=invalid_schema")
+            return ExtractionResult(succeeded=False)
+        except ModelProviderError as exc:
+            # Only fixed adapter categories enter diagnostics, never upstream text.
+            reason = (
+                exc.category
+                if exc.category
+                in {"incomplete_stream", "output_truncated", "content_filtered", "protocol_error"}
+                else "provider_error"
+            )
+            logger.warning("记忆提取失败 reason=%s", reason)
+            return ExtractionResult(succeeded=False)
         except Exception as exc:  # 记忆提取失败不阻塞聊天
-            logger.warning("记忆提取失败 error_type=%s", type(exc).__name__)
+            logger.warning("记忆提取失败 reason=provider_error error_type=%s", type(exc).__name__)
             return ExtractionResult(succeeded=False)
 
 
