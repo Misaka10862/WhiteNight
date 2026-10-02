@@ -14,18 +14,61 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 # 命中 "authorization: Bearer xyz"、"password=abc"、"api_key" 这类形态。
 _SECRET_PATTERN = re.compile(
     r"(?i)((?:api[_-]?key|auth(?:orization)?|token|secret|password|passwd|pwd|"
     r"db[_-]?key|master[_-]?key)\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"',;]+)",
 )
+_URL_PATTERN = re.compile(r"(?i)\bhttps?://[^\s<>\"']+")
+
+
+def _redact_url(match: re.Match[str]) -> str:
+    """Keep endpoints useful while hiding signed URLs and embedded credentials."""
+    try:
+        parts = urlsplit(match.group(0))
+    except ValueError:
+        return "<redacted-url>"
+    authority = parts.netloc
+    if "@" in authority:
+        authority = "***@" + authority.rsplit("@", 1)[1]
+    return urlunsplit(
+        (
+            parts.scheme,
+            authority,
+            parts.path,
+            "***" if parts.query else "",
+            "***" if parts.fragment else "",
+        )
+    )
 
 
 def redact(text: str) -> str:
     """把敏感赋值右侧替换为 ``***``，保留键名便于排查。"""
+    text = _URL_PATTERN.sub(_redact_url, text)
     text = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "***", text)
     return _SECRET_PATTERN.sub(r"\1***", text)
+
+
+def read_log_tail(path: Path, lines: int, *, max_bytes: int = 256 * 1024) -> str:
+    """Read a bounded suffix and redact legacy logs without rewriting evidence."""
+    if lines < 1 or max_bytes < 1:
+        return ""
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, 2)
+            start = max(0, size - max_bytes)
+            handle.seek(max(0, start - 1))
+            previous = handle.read(1) if start else b"\n"
+            tail = handle.read(max_bytes)
+    except FileNotFoundError:
+        return ""
+    if previous != b"\n":
+        # A partial first line may have lost the URL/key prefix needed for redaction.
+        _partial, _separator, tail = tail.partition(b"\n")
+    text = tail.decode("utf-8", errors="replace")
+    return redact("\n".join(text.splitlines()[-lines:]))
 
 
 class RedactingFilter(logging.Filter):

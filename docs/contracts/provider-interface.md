@@ -16,6 +16,10 @@ claimed capability is a tested implementation guarantee, never a property inferr
   Tools are proposals only: the application validates parameters and policy before execution.
 - Provider failures use bounded metadata such as category, HTTP status and an error ID. Credentials
   and upstream response bodies must not be copied into user-visible errors or diagnostic logs.
+- The OpenAI-compatible adapter emits `done` only after `[DONE]` or an explicit successful
+  `stop`/`tool_calls` finish. EOF alone, output truncation, filtering, in-stream errors and malformed
+  event payloads fail the request. Tool arguments must decode to JSON objects; invalid arguments
+  are not replaced by defaults, and an invalid call prevents publication of the entire call batch.
 
 ## TokenCounter
 

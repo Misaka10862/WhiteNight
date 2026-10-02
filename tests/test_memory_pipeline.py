@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from sqlalchemy import Engine
 
@@ -17,6 +19,7 @@ from whitenight.memory.service import MemoryMaintenanceError, MemoryService
 from whitenight.memory.store import MemoryStore
 from whitenight.memory.types import ExtractionResult, FactCandidate, FactUpsert
 from whitenight.models.base import ModelChunk
+from whitenight.models.openai import OpenAIProvider
 
 
 class RecordingEmbedding:
@@ -246,3 +249,101 @@ def test_deleted_memory_does_not_leave_cached_vectors(engine: Engine) -> None:
     assert retriever.retrieve("dessert") == []
     with engine.connect() as connection:
         assert connection.execute(select(MemoryVector.cache_key)).all() == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "{}",
+        '{"facts":[]}',
+        '{"episodes":[]}',
+        '{"factz":[],"episodes":[]}',
+        'prefix {"facts":[],"episodes":[]} trailing incomplete output',
+        '{"facts":[],"episodes":[],"succeeded":true}',
+    ],
+)
+def test_invalid_memory_envelope_keeps_checkpoint_retryable(engine: Engine, raw: str) -> None:
+    class Provider:
+        async def stream_chat(self, messages, tools=None):
+            yield ModelChunk(delta=raw, done=True)
+
+    store = MemoryStore(engine)
+    service = MemoryService(store, OllamaMemoryExtractor(Provider()), NullEmbeddingProvider())
+    with pytest.raises(MemoryMaintenanceError):
+        asyncio.run(service.extract_and_store([_message(1)], "s1"))
+    assert store.get_extraction_checkpoint("s1") == 0
+    assert store.list_facts() == []
+    assert store.list_episodes() == []
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_valid_empty_memory_envelope_advances_checkpoint(engine: Engine, fenced: bool) -> None:
+    class Provider:
+        async def stream_chat(self, messages, tools=None):
+            raw = json.dumps({"facts": [], "episodes": []})
+            yield ModelChunk(delta=f"```json\n{raw}\n```" if fenced else raw, done=True)
+
+    store = MemoryStore(engine)
+    service = MemoryService(store, OllamaMemoryExtractor(Provider()), NullEmbeddingProvider())
+    asyncio.run(service.extract_and_store([_message(1)], "s1"))
+    assert store.get_extraction_checkpoint("s1") == 1
+
+
+def test_interrupted_cloud_stream_preserves_extraction_and_summary_checkpoints(
+    engine: Engine,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Even parseable JSON and readable summary text are not proof of completion.
+        chunk = {"choices": [{"delta": {"content": '{"facts":[],"episodes":[]}'}}]}
+        return httpx.Response(200, content=("data: " + json.dumps(chunk) + "\n\n").encode())
+
+    provider = OpenAIProvider(
+        "https://provider.test/v1", "test", "synthetic", transport=httpx.MockTransport(handler)
+    )
+    store = MemoryStore(engine)
+    store.set_session_summary("s1", "keep prior summary", 1, 1)
+    service = MemoryService(store, OllamaMemoryExtractor(provider), NullEmbeddingProvider())
+    with pytest.raises(MemoryMaintenanceError):
+        asyncio.run(service.extract_and_store([_message(2)], "s1"))
+    from whitenight.models.base import ModelProviderError
+
+    with pytest.raises(ModelProviderError):
+        asyncio.run(service.summarize_session([_message(2)], "s1", provider))
+    assert store.get_extraction_checkpoint("s1") == 0
+    assert store.summary_checkpoint("s1") == 1
+    assert store.get_session_summary("s1") == "keep prior summary"
+
+
+def test_maintenance_logs_failure_stage_without_memory_content(engine: Engine, caplog) -> None:
+    from whitenight.memory.maintenance import MemoryMaintenance
+    from whitenight.storage.sessions import SessionStore
+
+    class Provider:
+        async def stream_chat(self, messages, tools=None):
+            yield ModelChunk(done=True)
+
+    class Extractor:
+        async def extract(self, messages):
+            return ExtractionResult(
+                facts=[
+                    FactCandidate(
+                        key="PRIVATE_KEY",
+                        value="PRIVATE_VALUE",
+                        source_message_ids=["PRIVATE_SOURCE"],
+                    )
+                ]
+            )
+
+    sessions = SessionStore(engine)
+    session = sessions.create_session()
+    sessions.add_message(session.id, "user", "PRIVATE_CONVERSATION")
+    store = MemoryStore(engine)
+    maintenance = MemoryMaintenance(
+        MemoryService(store, Extractor(), NullEmbeddingProvider()), sessions, Provider(), delay_s=0
+    )
+    maintenance.enqueue(session.id)
+    assert asyncio.run(maintenance.run_once()) == 0
+    assert "stage=extraction reason=invalid_sources" in caplog.text
+    assert "PRIVATE_" not in caplog.text
+    assert store.pending_maintenance(due_only=False) == [(session.id, 1)]
+    assert store.get_extraction_checkpoint(session.id) == 0

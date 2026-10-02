@@ -200,3 +200,123 @@ def test_openai_list_models_contract() -> None:
 
     assert asyncio.run(provider.list_models()) == ["gpt-4o-mini", "deepseek-chat"]
     assert captured == {"path": "/v1/models", "authorization": "Bearer secret"}
+
+
+def _stream_provider(body: str) -> OpenAIProvider:
+    return OpenAIProvider(
+        "https://api.test/v1",
+        "contract-test",
+        "synthetic",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body.encode())),
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "category"),
+    [
+        ('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n', "incomplete_stream"),
+        ("", "incomplete_stream"),
+        (
+            'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
+            "output_truncated",
+        ),
+        (
+            'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\ndata: [DONE]\n\n',
+            "content_filtered",
+        ),
+        (
+            'data: {"error":{"message":"PRIVATE_UPSTREAM_BODY"}}\n\ndata: [DONE]\n\n',
+            "provider_error",
+        ),
+        ("data: {PRIVATE_INVALID_JSON\n\ndata: [DONE]\n\n", "protocol_error"),
+        ("data: []\n\ndata: [DONE]\n\n", "protocol_error"),
+    ],
+)
+def test_failed_stream_never_emits_success(body: str, category: str) -> None:
+    chunks: list[ModelChunk] = []
+
+    async def run() -> None:
+        async for chunk in _stream_provider(body).stream_chat([]):
+            chunks.append(chunk)
+
+    with pytest.raises(ModelProviderError) as failure:
+        asyncio.run(run())
+    assert failure.value.category == category
+    assert "PRIVATE_" not in str(failure.value)
+    assert not any(chunk.done or chunk.tool_calls for chunk in chunks)
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "tool_calls"])
+@pytest.mark.parametrize("with_usage", [False, True])
+def test_explicit_successful_finish_is_sufficient_without_done_sentinel(
+    finish_reason: str, with_usage: bool
+) -> None:
+    body = (
+        "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": finish_reason}]}) + "\n\n"
+    )
+    if with_usage:
+        body += 'data: {"choices":[],"usage":{"total_tokens":12}}\n\n'
+
+    async def run() -> list[ModelChunk]:
+        return [chunk async for chunk in _stream_provider(body).stream_chat([])]
+
+    assert asyncio.run(run())[-1].done
+
+
+@pytest.mark.parametrize("arguments", ['{"path":', "[]", "null", '"PRIVATE_ARGUMENT"', ""])
+def test_invalid_tool_arguments_are_not_replaced_with_empty_object(arguments: str) -> None:
+    body = (
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-1",
+                                    "function": {"name": "file_find", "arguments": arguments},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        + "\n\ndata: [DONE]\n\n"
+    )
+
+    async def run() -> None:
+        async for _ in _stream_provider(body).stream_chat([]):
+            pass
+
+    with pytest.raises(ModelProviderError) as failure:
+        asyncio.run(run())
+    assert failure.value.category == "invalid_tool_arguments"
+    assert "PRIVATE_" not in str(failure.value)
+
+
+def test_one_invalid_call_blocks_publication_of_the_whole_batch() -> None:
+    calls = [
+        {
+            "index": 0,
+            "id": "valid",
+            "function": {"name": "file_find", "arguments": '{"names":["x"]}'},
+        },
+        {"index": 1, "id": "invalid", "function": {"name": "file_move", "arguments": '{"source":'}},
+    ]
+    body = (
+        "data: "
+        + json.dumps({"choices": [{"delta": {"tool_calls": calls}}]})
+        + "\n\ndata: [DONE]\n\n"
+    )
+    published: list[ToolCall] = []
+
+    async def run() -> None:
+        async for chunk in _stream_provider(body).stream_chat([]):
+            published.extend(chunk.tool_calls)
+
+    with pytest.raises(ModelProviderError):
+        asyncio.run(run())
+    assert published == []

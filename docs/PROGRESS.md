@@ -553,3 +553,29 @@ uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
   Runtime version is 0.1.0 and the active QQ collection window is 2.0 seconds.
 - Poke and duplicate-delivery regressions use controlled contract transports; no
   synthetic messages were sent to the real QQ account during verification.
+
+## 2026-10-03 — Runtime review and completion/data-integrity hardening
+
+- Reviewed architecture, September 24–October 2 application/launchd logs and read-only
+  aggregate runtime state. The window has six memory-maintenance retries, but no jobs
+  remain pending at inspection. Empty/invalid model output and one transport read error
+  are observed symptoms; the old logs cannot establish every warning's precise cause.
+- Attribution before implementation: synthetic contracts prove deterministic leaks of
+  signed URL parameters, false stream completion, invalid tool-argument coercion and
+  acceptance of missing memory fields as empty success. Twenty-three new cases failed
+  on the baseline; this is separate from unverified model capability claims.
+- Redact URL credentials/query/fragment at write and read boundaries. Log API/diagnostics
+  use a bounded tail; API reads leave the event loop. Historical logs remain untouched.
+- Validate OpenAI-compatible stream termination and tool JSON before publishing success
+  or tool proposals. Require complete memory envelopes before checkpoint advancement;
+  clarify the empty-result prompt and log fixed failure-stage/reason metadata.
+- Existing user changes remain in the original checkout. This work uses an isolated
+  branch from `f4b468d`; no dependencies, migrations, permission rules, live providers
+  or running service configuration changed. Focused verification: 68 tests passed.
+- Final `PYTHONPATH=src ./scripts/check.sh` passed: **386 Python tests passed, 4 skipped**,
+  **13 frontend tests passed**, plus all lint/type/build/security/English checks. Final
+  stream regressions cover usage-only chunks and mixed valid/invalid tool batches.
+  The original service still returned `ok`; these changes have not been deployed there.
+- Delivery uses `codex/runtime-reliability-review` and a GitHub PR. Git history records
+  the exact revision. Detailed evidence and prioritized follow-ups:
+  [runtime review](reports/runtime-review-2026-10-03.md).
