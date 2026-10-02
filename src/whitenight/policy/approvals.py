@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import Engine, or_, select, update
+from sqlalchemy import Engine, or_, select, text, update
 from sqlalchemy.orm import Session as OrmSession
 
-from whitenight.storage.models import Approval, SessionGrant
+from whitenight.storage.models import Approval, PendingToolCall, SessionGrant
 
 ONCE_TTL = timedelta(minutes=10)
 SESSION_GRANT_TTL = timedelta(hours=24)
@@ -57,6 +57,9 @@ class ApprovalRequest:
     channel: str | None
     created_at: datetime
     expires_at: datetime | None
+    channel_target: str | None = None
+    presented_at: datetime | None = None
+    status: str = "pending"
 
 
 @dataclass(frozen=True)
@@ -106,7 +109,96 @@ class ApprovalService:
         if risk == "batch_delete":
             raise ValueError("批量删除不能通过审批授权给 Agent")
         now = _now()
+        digest = params_digest(params) if params is not None else None
+        key = (
+            params_digest(
+                {
+                    "tool": tool_name,
+                    "params": digest,
+                    "session": session_id,
+                    "channel": channel,
+                    "target": channel_target,
+                    "scope": scope,
+                }
+            )
+            if digest and not tool_name.startswith("delegate.")
+            else None
+        )
         with self._orm() as orm:
+            # SQLite/SQLCipher writer reservation serializes concurrent request/upsert.
+            orm.execute(text("BEGIN IMMEDIATE"))
+            active = orm.execute(
+                select(PendingToolCall, Approval)
+                .join(Approval, Approval.id == PendingToolCall.approval_id)
+                .where(
+                    PendingToolCall.session_id == session_id,
+                    PendingToolCall.channel == channel,
+                    PendingToolCall.channel_target == channel_target,
+                    PendingToolCall.tool_name == tool_name,
+                    PendingToolCall.status.in_(["running", "awaiting_review"]),
+                )
+            ).all()
+            for operation, row in active:
+                saved = json.loads(operation.params_json)
+                if operation.params_digest == digest or (
+                    tool_name == "file.move"
+                    and params
+                    and saved.get("source") == params.get("source")
+                ):
+                    record = self._record(row)
+                    from dataclasses import replace
+
+                    return replace(record, status=operation.status)
+            candidates = orm.scalars(
+                select(Approval).where(
+                    Approval.tool_name == tool_name,
+                    Approval.session_id == session_id,
+                    Approval.channel == channel,
+                    Approval.status.in_(["pending", "approved", "awaiting_review"]),
+                )
+            ).all()
+            for row in candidates:
+                binding = _binding(row.params_summary)
+                if binding.get("channel_target") != channel_target:
+                    continue
+                if row.status in {"approved", "awaiting_review"}:
+                    if (key is not None and row.active_key == key) or (
+                        tool_name == "file.move"
+                        and params
+                        and binding.get("source") == params.get("source")
+                    ):
+                        return self._record(row)
+                    continue
+                if row.expires_at and row.expires_at < now:
+                    row.status, row.active_key = "revoked", None
+                    orm.execute(
+                        update(PendingToolCall)
+                        .where(
+                            PendingToolCall.approval_id == row.id,
+                            PendingToolCall.status == "pending",
+                        )
+                        .values(status="expired")
+                    )
+                    continue
+                if key and binding.get("params_digest") == digest and row.scope == scope:
+                    row.active_key = key
+                    orm.commit()
+                    return self._record(row)
+                if (
+                    tool_name == "file.move"
+                    and params
+                    and row.status == "pending"
+                    and binding.get("source") == params.get("source")
+                ):
+                    row.status, row.active_key = "revoked", None
+                    orm.execute(
+                        update(PendingToolCall)
+                        .where(
+                            PendingToolCall.approval_id == row.id,
+                            PendingToolCall.status == "pending",
+                        )
+                        .values(status="superseded")
+                    )
             approval = Approval(
                 code=secrets.token_urlsafe(6)[:8],
                 tool_name=tool_name,
@@ -115,12 +207,16 @@ class ApprovalService:
                 status="pending",
                 session_id=session_id,
                 channel=channel,
+                active_key=key,
                 params_summary=json.dumps(
                     {
                         "binding_version": 1,
                         "summary": params_summary,
-                        "params_digest": params_digest(params) if params is not None else None,
+                        "params_digest": digest,
                         "channel_target": channel_target,
+                        "source": params.get("source")
+                        if params and tool_name == "file.move"
+                        else None,
                     },
                     ensure_ascii=False,
                 ),
@@ -128,18 +224,46 @@ class ApprovalService:
             )
             orm.add(approval)
             orm.commit()
-            return ApprovalRequest(
-                id=approval.id,
-                code=approval.code,
-                tool_name=approval.tool_name,
-                risk=approval.risk,
-                scope=approval.scope,
-                params_summary=_display_summary(approval.params_summary),
-                session_id=approval.session_id,
-                channel=approval.channel,
-                created_at=approval.created_at,
-                expires_at=approval.expires_at,
+            return self._record(approval)
+
+    @staticmethod
+    def _record(row: Approval) -> ApprovalRequest:
+        return ApprovalRequest(
+            id=row.id,
+            code=row.code,
+            tool_name=row.tool_name,
+            risk=row.risk,
+            scope=row.scope,
+            params_summary=_display_summary(row.params_summary),
+            session_id=row.session_id,
+            channel=row.channel,
+            created_at=row.created_at,
+            expires_at=row.expires_at,
+            channel_target=_binding(row.params_summary).get("channel_target"),
+            presented_at=row.presented_at,
+            status=row.status,
+        )
+
+    def mark_presented(self, codes: list[str]) -> None:
+        with self._orm() as orm:
+            orm.execute(
+                update(Approval)
+                .where(Approval.code.in_(codes), Approval.status == "pending")
+                .values(presented_at=_now())
             )
+            orm.commit()
+
+    def for_context(
+        self, session_id: str, channel: str, target: str | None, *, presented_only: bool = False
+    ) -> list[ApprovalRequest]:
+        return [
+            item
+            for item in self.list_pending(limit=None)
+            if item.session_id == session_id
+            and item.channel == channel
+            and item.channel_target == target
+            and (not presented_only or item.presented_at is not None)
+        ]
 
     def resolve_once(
         self,
@@ -224,6 +348,7 @@ class ApprovalService:
                 return Resolution(False, "once", f"审批已处理或不可用（{approval.status}）")
             if approval.expires_at and approval.expires_at < now:
                 approval.status = "revoked"
+                approval.active_key = None
                 orm.commit()
                 return Resolution(False, "once", "审批编号已过期")
             if approval.session_id != session_id:
@@ -295,7 +420,7 @@ class ApprovalService:
                     Approval.used_count == 0,
                     or_(Approval.expires_at.is_(None), Approval.expires_at >= now),
                 )
-                .values(status="consumed", used_count=1)
+                .values(status="consumed", used_count=1, active_key=None)
                 .returning(Approval.id)
             )
             if changed is None:
@@ -339,7 +464,7 @@ class ApprovalService:
                 for row, approval in rows
             )
 
-    def list_pending(self, limit: int = 20) -> list[ApprovalRequest]:
+    def list_pending(self, limit: int | None = 1000) -> list[ApprovalRequest]:
         now = _now()
         with self._orm() as orm:
             rows = orm.scalars(
@@ -351,21 +476,17 @@ class ApprovalService:
                 .order_by(Approval.created_at.desc())
                 .limit(limit)
             ).all()
-            return [
-                ApprovalRequest(
-                    id=row.id,
-                    code=row.code,
-                    tool_name=row.tool_name,
-                    risk=row.risk,
-                    scope=row.scope,
-                    params_summary=_display_summary(row.params_summary),
-                    session_id=row.session_id,
-                    channel=row.channel,
-                    created_at=row.created_at,
-                    expires_at=row.expires_at,
-                )
-                for row in rows
-            ]
+            return [self._record(row) for row in rows]
+
+    def invalidate(self, code: str) -> None:
+        """Close a failed validation without manufacturing user consent or rejection."""
+        with self._orm() as orm:
+            orm.execute(
+                update(Approval)
+                .where(Approval.code == code, Approval.status.in_(["pending", "approved"]))
+                .values(status="revoked", active_key=None, decided_at=_now())
+            )
+            orm.commit()
 
     def reject(self, code: str) -> Resolution:
         """拒绝审批：拒绝只消费编号，不产生任何授权。"""
@@ -382,7 +503,7 @@ class ApprovalService:
                     Approval.id == approval.id,
                     Approval.status == "pending",
                 )
-                .values(status="rejected", decided_at=now, used_count=1)
+                .values(status="rejected", decided_at=now, used_count=1, active_key=None)
                 .returning(Approval.id)
             )
             if changed is None:

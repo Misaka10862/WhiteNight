@@ -23,6 +23,7 @@ from whitenight.documents.dispatcher import parse_document
 from whitenight.documents.text import read_text_file
 from whitenight.policy.risk import RiskLevel
 from whitenight.tools.base import Source, ToolContext, ToolParameters, ToolResult
+from whitenight.tools.paths import canonical_path, path_error
 
 
 class FileReadParams(ToolParameters):
@@ -59,6 +60,9 @@ class FileReadTool:
 
 
 class FileFindParams(ToolParameters):
+    entry_type: Literal["file", "directory", "any"] = Field(
+        default="file", description="查找文件、目录或两者；移动目的地必须选择 directory"
+    )
     names: list[str] = Field(
         min_length=1,
         max_length=20,
@@ -89,7 +93,8 @@ class FileFindParams(ToolParameters):
 class FileFindTool:
     name = "file.find"
     description = (
-        "递归查找一个或多个本机文件；支持精确和模糊文件名匹配，并报告候选数量是否需要用户确认"
+        "查找本机文件或目录；找文件夹必须设置 entry_type=directory，优先精确匹配。"
+        "超时或无权限的搜索不能证明目标不存在。"
     )
     risk = RiskLevel.READ_ONLY
 
@@ -100,8 +105,12 @@ class FileFindTool:
         assert isinstance(params, FileFindParams)
         del context
         root = Path(params.root).expanduser().resolve() if params.root else Path.home().resolve()
-        if not root.is_dir():
-            return ToolResult.failure("文件查找失败", f"搜索根目录不存在：{root}")
+        try:
+            root.stat()
+            if not root.is_dir():
+                return ToolResult.failure("文件查找失败", f"搜索根路径不是目录：{root}")
+        except OSError as exc:
+            return ToolResult.failure("文件查找失败", path_error(exc))
 
         queries = list(dict.fromkeys(name.strip() for name in params.names if name.strip()))
         if len(queries) != len(params.names) or any(Path(name).name != name for name in queries):
@@ -111,11 +120,14 @@ class FileFindTool:
         exact_matches: dict[str, list[Path]] = {query: [] for query in queries}
         fuzzy_matches: dict[str, list[tuple[float, Path]]] = {query: [] for query in queries}
         denied = 0
+        errors: list[str] = []
         timed_out = False
 
         def onerror(error: OSError) -> None:
             nonlocal denied
-            denied += 1
+            denied += int(isinstance(error, PermissionError))
+            if len(errors) < 10:
+                errors.append(path_error(error))
 
         for directory, dirs, files in os.walk(
             root, topdown=True, followlinks=False, onerror=onerror
@@ -123,17 +135,25 @@ class FileFindTool:
             if time.monotonic() >= deadline:
                 timed_out = True
                 break
+            directory_names = list(dirs)
             dirs[:] = (
                 [name for name in dirs if not Path(directory, name).is_symlink()]
                 if params.recursive
                 else []
             )
-            for index, filename in enumerate(files):
+            entries = (
+                files
+                if params.entry_type == "file"
+                else directory_names
+                if params.entry_type == "directory"
+                else files + directory_names
+            )
+            for index, filename in enumerate(entries):
                 if index % 128 == 0 and time.monotonic() >= deadline:
                     timed_out = True
                     break
                 candidate = Path(directory, filename)
-                if not candidate.is_file() or candidate.is_symlink():
+                if candidate.is_symlink():
                     continue
                 resolved: Path | None = None
                 for query in queries:
@@ -173,18 +193,21 @@ class FileFindTool:
         expected_count = params.expected_count or len(queries)
         selected_queries = {details[1] for _path, details in ordered}
         unmatched_queries = [query for query in queries if query not in selected_queries]
-        partial = timed_out or truncated or denied > 0
-        needs_confirmation = len(matches) != expected_count or bool(unmatched_queries) or truncated
+        partial = timed_out or truncated or bool(errors)
+        needs_confirmation = len(matches) != expected_count or bool(unmatched_queries) or partial
         content = "\n".join(str(path) for path in matches)
         return ToolResult(
             ok=True,
             summary=(
-                f"在 {root} 找到 {len(matches)} 个匹配文件"
+                f"在 {root} 找到 {len(matches)} 个匹配条目"
                 + ("（结果可能不完整）" if partial else "")
             ),
             content=content,
             sources=[Source(label=path.name, uri=str(path), kind="file") for path in matches],
             metadata={
+                "entry_type": params.entry_type,
+                "partial": partial,
+                "errors": errors,
                 "root": str(root),
                 "names": queries,
                 "count": len(matches),
@@ -196,6 +219,7 @@ class FileFindTool:
                 "candidates": [
                     {
                         "path": str(path),
+                        "entry_type": "directory" if path.is_dir() else "file",
                         "query": details[1],
                         "method": details[2],
                         "score": round(details[0], 3),
@@ -425,6 +449,7 @@ class FileMoveParams(ToolParameters):
     overwrite: bool = False
     approved_source_stat: str | None = None
     approved_destination_exists: bool | None = None
+    approved_destination_stat: str | None = None
 
 
 class FileMoveTool:
@@ -437,8 +462,13 @@ class FileMoveTool:
 
     def approval_metadata(self, params: ToolParameters, context: ToolContext) -> dict[str, object]:
         assert isinstance(params, FileMoveParams)
-        source = Path(params.source).expanduser().resolve()
-        destination = Path(params.destination).expanduser().resolve()
+        source = canonical_path(params.source)
+        destination = canonical_path(params.destination)
+        source.stat()
+        try:
+            destination.parent.stat()
+        except FileNotFoundError as exc:
+            raise ValueError(f"目标目录不存在：{destination.parent}") from exc
         if not source.is_file() or source.is_symlink():
             raise ValueError(f"源文件不存在或不是普通文件：{source}")
         if destination.is_dir():
@@ -447,6 +477,8 @@ class FileMoveTool:
             raise ValueError(f"目标目录不存在：{destination.parent}")
         if source == destination:
             raise ValueError("源文件与目标文件相同")
+        if destination.exists() and not params.overwrite:
+            raise ValueError(f"目标文件已存在：{destination}；请选择新名称或明确覆盖")
         source_stat = params.approved_source_stat or _stat_fingerprint(source)
         destination_exists = (
             params.approved_destination_exists
@@ -460,6 +492,8 @@ class FileMoveTool:
                 "destination": str(destination),
                 "approved_source_stat": source_stat,
                 "approved_destination_exists": destination_exists,
+                "approved_destination_stat": params.approved_destination_stat
+                or (_stat_fingerprint(destination) if destination.exists() else None),
             }
         )
         return {
@@ -467,16 +501,16 @@ class FileMoveTool:
             "approval_summary": {
                 "source": str(source),
                 "destination": str(destination),
-                "source_stat": source_stat,
                 "destination_exists": destination_exists,
+                "overwrite": params.overwrite,
             },
         }
 
     def execute(self, context: ToolContext, params: ToolParameters) -> ToolResult:
         assert isinstance(params, FileMoveParams)
         del context
-        source = Path(params.source).expanduser().resolve()
-        destination = Path(params.destination).expanduser().resolve()
+        source = canonical_path(params.source)
+        destination = canonical_path(params.destination)
         if (
             params.approved_source_stat is not None
             and _stat_fingerprint(source) != params.approved_source_stat
@@ -487,6 +521,11 @@ class FileMoveTool:
             and destination.exists() != params.approved_destination_exists
         ):
             return ToolResult.failure(f"未移动 {source}", "目标状态在审批后发生变化")
+        if (
+            params.approved_destination_stat is not None
+            and _stat_fingerprint(destination) != params.approved_destination_stat
+        ):
+            return ToolResult.failure(f"未移动 {source}", "目标文件在审批后发生变化")
         if not source.is_file():
             return ToolResult.failure(f"未移动 {source}", "源文件不存在")
         if destination.exists() and not params.overwrite:

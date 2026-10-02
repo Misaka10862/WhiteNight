@@ -28,10 +28,20 @@ from whitenight.tools.pending import PendingToolStore
 logger = logging.getLogger(__name__)
 
 
-def approval_prompt(tool_name: str, code: str | None) -> str:
-    if tool_name == "file.move":
-        return "文件移动需要审批，直接回复“同意”即可确认；有多项待审批时需先选择。"
-    return f"操作 {tool_name} 需要审批。请回复：同意 {code}，或：拒绝 {code}。"
+def approval_prompt(
+    tool_name: str, code: str | None, metadata: dict[str, object] | None = None
+) -> str:
+    summary = (metadata or {}).get("approval_summary")
+    if tool_name == "file.move" and isinstance(summary, dict):
+        detail = f"源文件：{summary.get('source')}\n目标：{summary.get('destination')}\n" + (
+            "将覆盖目标文件。\n" if summary.get("overwrite") else "不覆盖已有文件。\n"
+        )
+    else:
+        detail = json.dumps(summary, ensure_ascii=False) + "\n" if summary else ""
+    return detail + (
+        f"操作 {tool_name} 需要审批。请回复：同意 {code}，或：拒绝 {code}。"
+        "单项可回复“同意”，多项可回复“全部同意”。"
+    )
 
 
 def tool_invoker(
@@ -77,9 +87,10 @@ class ToolLoopRunner:
         session_id: str,
         messages: list[ProviderMessage],
         channel_context: ChannelContext,
+        receipt_prefix: str = "",
     ) -> AsyncGenerator[ChatEvent, None]:
         provider = self._get_provider()
-        text_parts: list[str] = []
+        text_parts: list[str] = [receipt_prefix + "\n\n"] if receipt_prefix else []
         seen_calls: set[str] = set()
         supports_tools = model_capabilities(provider).tools
         tool_specs = (
@@ -169,6 +180,21 @@ class ToolLoopRunner:
                             )
                         )
                 if waiting:
+                    waiting = list(
+                        {outcome.approval_id: (call, outcome) for call, outcome in waiting}.values()
+                    )
+                    approval_service = self._tool_executor._approvals
+                    active_ids = {
+                        item.id
+                        for item in approval_service.for_context(
+                            session_id, channel_context.channel, channel_context.target
+                        )
+                    }
+                    waiting = [
+                        (call, outcome)
+                        for call, outcome in waiting
+                        if outcome.approval_id in active_ids
+                    ]
                     approval_lines: list[str] = []
                     for call, outcome in waiting:
                         if outcome.approval_id is None or self._pending_tools is None:
@@ -187,11 +213,22 @@ class ToolLoopRunner:
                             params=pending_params,
                             assistant_content="".join(turn_parts),
                         )
-                        approval_lines.append(approval_prompt(call.name, outcome.approval_code))
+                        approval_lines.append(
+                            approval_prompt(call.name, outcome.approval_code, outcome.metadata)
+                        )
                     reply = (
-                        "".join(text_parts).strip() + "\n\n" + "\n".join(approval_lines)
+                        "".join(text_parts).strip()
+                        + "\n\n"
+                        + (
+                            "\n".join(dict.fromkeys(approval_lines))
+                            or "审批已被新请求替代，请查看当前待审批操作。"
+                        )
                     ).strip()
                     message = self._persist_assistant(session_id, reply)
+                    assert self._tool_executor is not None
+                    self._tool_executor._approvals.mark_presented(
+                        [outcome.approval_code for _, outcome in waiting if outcome.approval_code]
+                    )
                     for call, outcome in waiting:
                         yield ChatEvent(
                             type="approval",

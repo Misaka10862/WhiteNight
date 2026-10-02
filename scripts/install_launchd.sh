@@ -1,52 +1,93 @@
 #!/usr/bin/env bash
-# WhiteNight launchd 服务安装器（默认 dry-run，不修改系统）。
-#
-# 用法：
-#   ./scripts/install_launchd.sh                 # 预览将生成的 plist
-#   ./scripts/install_launchd.sh --install       # 写入 ~/Library/LaunchAgents 并加载
-#   ./scripts/install_launchd.sh --uninstall     # 卸载并移除
+# Default is a side-effect-free preview. Installation preserves a rollback plist.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
 PROJECT_DIR="$(pwd)"
-UV_PATH="${UV_PATH:-$(command -v uv)}"
-UV_DIR="$(dirname "$UV_PATH")"
+SERVICE_APP="${WHITENIGHT_APP_PATH:-$HOME/Applications/WhiteNight.app}"
 LABEL="com.whitenight.service"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs/WhiteNight"
-PLIST_TEMPLATE="deploy/com.whitenight.service.plist.template"
 PLIST_TARGET="$AGENTS_DIR/$LABEL.plist"
-
-if [[ -z "${UV_PATH:-}" ]]; then
-  echo "uv was not found; install it with Homebrew or the official installer" >&2
-  exit 1
-fi
+DOMAIN="gui/$(id -u)"
 
 generate() {
-  mkdir -p "$AGENTS_DIR" "$LOG_DIR"
-  sed -e "s|{{UV_PATH}}|$UV_PATH|g" \
-      -e "s|{{UV_DIR}}|$UV_DIR|g" \
-      -e "s|{{PROJECT_DIR}}|$PROJECT_DIR|g" \
-      -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
-      "$PLIST_TEMPLATE"
+  .venv/bin/python - "$SERVICE_APP" "$PROJECT_DIR" "$LOG_DIR" <<'PY'
+import os
+import plistlib
+import sys
+app, project, logs = sys.argv[1:]
+plist = {
+    "Label": "com.whitenight.service",
+    "ProgramArguments": [app + "/Contents/MacOS/WhiteNight", "--project", project],
+    "WorkingDirectory": project, "RunAtLoad": True, "KeepAlive": True,
+    "ProcessType": "Interactive", "ExitTimeOut": 60,
+    "StandardOutPath": logs + "/whitenight.out.log",
+    "StandardErrorPath": logs + "/whitenight.err.log",
+    "EnvironmentVariables": {"PATH": os.path.expanduser("~/.local/bin") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+}
+sys.stdout.buffer.write(plistlib.dumps(plist))
+PY
+}
+
+bootstrap_job() {
+  for ((attempt=0; attempt<10; attempt++)); do
+    if launchctl bootstrap "$DOMAIN" "$PLIST_TARGET"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 case "${1:-}" in
   --install)
+    ./scripts/build_service_app.sh
+    mkdir -p "$AGENTS_DIR" "$LOG_DIR"
+    PREVIOUS=""
+    if [[ -f "$PLIST_TARGET" ]]; then
+      PREVIOUS="$LOG_DIR/$LABEL.$(date +%Y%m%dT%H%M%S).plist.backup"
+      cp -p "$PLIST_TARGET" "$PREVIOUS"
+      echo "Rollback configuration: $PREVIOUS"
+    fi
+    # bootout can return before the old job fully leaves its launchd domain.
+    if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      launchctl bootout "$DOMAIN/$LABEL"
+      for ((attempt=0; attempt<50; attempt++)); do
+        if ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+      if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+        echo "Previous service is still exiting; no second instance was started." >&2
+        exit 1
+      fi
+    fi
     generate > "$PLIST_TARGET"
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$PLIST_TARGET"
-    launchctl enable "gui/$(id -u)/$LABEL"
-    echo "Installed and loaded: $PLIST_TARGET"
-    echo "Status: launchctl print gui/$(id -u)/$LABEL | head"
+    if ! bootstrap_job; then
+      if [[ -n "$PREVIOUS" ]]; then
+        cp -p "$PREVIOUS" "$PLIST_TARGET"
+        bootstrap_job
+      fi
+      exit 1
+    fi
+    launchctl enable "$DOMAIN/$LABEL"
+    echo "Installed: $SERVICE_APP"
+    echo "Grant WhiteNight Full Disk Access in System Settings, then restart this service."
     ;;
   --uninstall)
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    rm -f "$PLIST_TARGET"
-    echo "Unloaded and removed: $PLIST_TARGET"
+    if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      launchctl bootout "$DOMAIN/$LABEL"
+    fi
+    .venv/bin/python - "$PLIST_TARGET" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+from uuid import uuid4
+path = Path(sys.argv[1])
+if path.exists():
+    shutil.move(str(path), str(Path.home() / ".Trash" / (uuid4().hex + "-" + path.name)))
+PY
     ;;
-  *)
-    echo "==> Preview only; run $0 --install after review"
-    generate
-    ;;
+  *) generate ;;
 esac

@@ -43,6 +43,12 @@ class ToolBatchScheduler:
         if all(self.policy.risk_of(call.name) is RiskLevel.READ_ONLY for call in calls):
             return list(await asyncio.gather(*(invoke(call) for call in calls)))
         outcomes = []
+        # Move calls only prepare individually bound once-approvals. Expose the full
+        # batch before asking for consent; execution still validates every file state.
+        preparing_moves = bool(calls) and all(
+            call.name == "file.move" and self.policy.risk_of(call.name) is RiskLevel.MEDIUM
+            for call in calls
+        )
         blocked = False
         for call in calls:
             if blocked:
@@ -54,5 +60,7 @@ class ToolBatchScheduler:
                 continue
             outcome = await invoke(call)
             outcomes.append(outcome)
-            blocked = outcome.status != "ok"
+            blocked = outcome.status != "ok" and not (
+                preparing_moves and outcome.status == "waiting_approval"
+            )
         return outcomes

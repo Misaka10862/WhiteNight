@@ -49,8 +49,8 @@ def _adapter(engine: Engine, settings: Settings, sender: FakeQQ):
     )
     sessions = SessionStore(engine, attachments_dir=qq_settings.data_dir / "attachments")
     channel_sessions = ChannelSessionStore(engine, sessions)
-    chat = ChatService(sessions, DummyProvider("在的，主人"), qq_settings)
     approvals = ApprovalService(engine)
+    chat = ChatService(sessions, DummyProvider("在的，主人"), qq_settings, approvals=approvals)
     return OneBotAdapter(
         qq_settings,
         sessions,
@@ -441,7 +441,7 @@ def test_file_segment_resolves_file_id_through_onebot(engine: Engine, settings: 
 
 
 @pytest.mark.parametrize("tool_name", ["file.write", "file.delete", "delegate.hermes.action"])
-def test_other_approvals_without_code_still_require_code(
+def test_approval_without_matching_recipient_is_not_selected(
     engine: Engine, settings: Settings, tool_name: str
 ) -> None:
     sender = FakeQQ()
@@ -459,10 +459,9 @@ def test_other_approvals_without_code_still_require_code(
 
     status = asyncio_run(adapter.handle_event(_private(802, "允许操作")))
 
-    assert status["status"] == "approval_code_required"
-    assert sender.messages[-1][1] == (
-        f"审批必须带一次性编号。请回复：同意 {approval.code}，或：拒绝 {approval.code}。"
-    )
+    assert status["status"] == "approval_invalid"
+    assert "没有有效" in sender.messages[-1][1]
+    assert adapter._approvals.list_pending()[0].code == approval.code
 
 
 @pytest.mark.parametrize("confirmation", ["同意", "同意。", "允许操作"])
@@ -517,7 +516,7 @@ def test_approval_without_code_reports_when_nothing_is_pending(
     status = asyncio_run(adapter.handle_event(_private(803, "允许操作")))
 
     assert status["status"] == "approval_invalid"
-    assert sender.messages[-1][1] == "当前没有有效的待审批操作，请重新发起文件操作。"
+    assert sender.messages[-1][1] == "当前没有有效的待审批操作。"
 
 
 def test_poke_segment_is_recognized_and_visible(engine: Engine, settings: Settings) -> None:
@@ -545,12 +544,13 @@ def test_qq_approval_commands(engine: Engine, settings: Settings) -> None:
     sender = FakeQQ()
     adapter = _adapter(engine, settings, sender)
     approvals: ApprovalService = adapter._approvals
+    session_id = str(asyncio_run(adapter.handle_event(_private(9, "你好")))["session_id"])
     request = approvals.request(
         "file.write",
         "medium",
         "once",
         '{"path":"/x"}',
-        session_id=None,
+        session_id=session_id,
         channel="onebot",
         channel_target="10001",
     )
@@ -568,6 +568,7 @@ def test_qq_approval_commands(engine: Engine, settings: Settings) -> None:
         "delete",
         "once",
         '{"path":"/y"}',
+        session_id=session_id,
         channel="onebot",
         channel_target="10001",
     )

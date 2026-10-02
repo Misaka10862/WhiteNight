@@ -815,3 +815,84 @@ def test_local_model_receives_verified_recent_qq_attachment(engine, settings) ->
 
     assert events[-1].type == "done"
     assert events[-1].text == "已识别附件。"
+
+
+def test_missing_file_location_followup_delivers(engine, settings, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    folder = home / "Desktop" / "留学资料" / "简历制作"
+    folder.mkdir(parents=True)
+    target = folder / "en.pdf"
+    target.write_bytes(b"test document")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    class LocationProvider:
+        capabilities = ModelCapabilities(tools=True)
+
+        async def stream_chat(self, messages, tools=None):
+            assert tools and any(tool.name == "channel.file.send" for tool in tools)
+            constraints = "\n".join(m.content for m in messages if m.role == "system")
+            assert "不要发送候选清单外的文件" not in constraints
+            if any(m.role == "tool" for m in messages):
+                yield ModelChunk(done=True)
+            else:
+                yield ModelChunk(
+                    done=True,
+                    tool_calls=[
+                        ToolCall(
+                            id="find-resume",
+                            name="file.find",
+                            arguments={"names": ["en.pdf"], "root": str(tmp_path / "wrong")},
+                        )
+                    ],
+                )
+
+        async def health(self):
+            return {"ok": True}
+
+    delivery = FakeDelivery()
+    service, store, _ = _service(
+        engine, settings, LocationProvider(), [FileFindTool(), ChannelFileSendTool()], delivery
+    )
+    session = store.create_session()
+    store.add_message(session.id, "user", "把 简历制作 文件夹里的en.pdf发我")
+    store.add_message(
+        session.id,
+        "assistant",
+        "找到的文件候选需要你确认：你要求 1 个，当前找到 0 个。\n"
+        "当前没有足够相似的候选，请补充文件名、扩展名或所在目录。",
+    )
+    reply = "桌面的 留学资料里的 简历制作 文件夹"
+
+    async def run():
+        return [
+            event
+            async for event in service.stream_reply(
+                ChatRequest(session_id=session.id, text=reply),
+                ChannelContext(channel="onebot", target="10001"),
+            )
+        ]
+
+    events = asyncio.run(run())
+    assert delivery.sent == [("10001", str(target), "en.pdf")]
+    assert events[-1].type == "done"
+    assert service._files._file_search_root_hint(reply) == folder
+
+
+def test_location_followup_does_not_revive_unrelated_or_cancelled_task(engine, settings):
+    service, store, _ = _service(engine, settings, FindProvider(), [FileFindTool()])
+    session = store.create_session()
+    store.add_message(session.id, "user", "把 en.pdf 发我")
+    store.add_message(session.id, "assistant", "找到的文件候选需要你确认：当前找到 0 个。")
+    store.add_message(session.id, "user", "占位")
+    history = store.list_messages(session.id)
+    for reply in ("算了", "不用发了，桌面的文件夹删掉", "你好", "把桌面文件夹移到下载"):
+        assert not service._files._requires_file_delivery(
+            reply, history, ChannelContext(channel="onebot", target="10001")
+        )
+    reply = "桌面的 留学资料里的 简历制作 文件夹"
+    assert not service._files._requires_file_delivery(reply, history, ChannelContext(channel="web"))
+    store.add_message(session.id, "assistant", "好的，任务取消了。")
+    store.add_message(session.id, "user", reply)
+    assert not service._files._requires_file_delivery(
+        reply, store.list_messages(session.id), ChannelContext(channel="onebot", target="10001")
+    )

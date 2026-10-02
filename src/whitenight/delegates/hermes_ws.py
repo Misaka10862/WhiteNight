@@ -378,6 +378,7 @@ class ManagedHermesGatewayAdapter:
                     channel_target=request.metadata.get("channel_target"),
                     params=body,
                 )
+                self.approvals.mark_presented([approval.code])
                 self._approvals[approval.code] = _LiveApproval(
                     request.task_id,
                     session_id,

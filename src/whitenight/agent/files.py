@@ -7,8 +7,10 @@ from whitenight.channels.types import AttachmentRecord, ChannelContext, MessageR
 from whitenight.config import Settings
 from whitenight.models.base import ToolCall
 from whitenight.storage.receipts import verify_attachment
-from whitenight.tools.base import ToolResult
+from whitenight.tools.base import ToolContext, ToolResult
 from whitenight.tools.executor import ExecutionOutcome
+from whitenight.tools.files import FileFindTool
+from whitenight.tools.paths import canonical_path, path_error
 
 _FILE_SEND_INTENT_RE = re.compile(
     r"(?:发(?:送)?(?:给)?我|传(?:送)?(?:给)?我|发过来|发送文件|上传文件)"
@@ -35,6 +37,7 @@ _FILE_LOCATION_ALIASES = (
     ("下载目录", "Downloads"),
     ("下载文件夹", "Downloads"),
     ("Downloads", "Downloads"),
+    ("下载", "Downloads"),
     ("文稿", "Documents"),
     ("Documents", "Documents"),
     ("主目录", ""),
@@ -99,8 +102,112 @@ class FileTaskCoordinator:
             candidate = (base / relative).resolve()
             if candidate.is_relative_to(base) and candidate.is_dir():
                 return candidate
+            parts = [part.strip() for part in re.split(r"里面的|里的|下的|的", raw_relative)]
+            if all(parts) and not any(part in {".", ".."} for part in parts):
+                nested = base.joinpath(*parts).resolve()
+                if nested.is_relative_to(base) and nested.is_dir():
+                    return nested
             return base
         return None
+
+    @staticmethod
+    def move_destination(text: str) -> tuple[Path | None, str | None]:
+        """Resolve explicit destination hierarchy without falling back to its parent."""
+        move = re.search(r"(?:移动到|移到|放到|搬到|转移到|移至)\s*(.+)", text)
+        destination = move[1] if move else text
+        destination = destination.strip().rstrip("。！!？?")
+        destination = re.sub(r"(?:文件夹|目录)(?:下面|里面|下|里|内|中)?$", "", destination).strip()
+        unquoted = destination.strip("`\"'")
+        if unquoted.startswith(("/", "~/")):
+            try:
+                candidate = canonical_path(unquoted)
+                candidate.stat()
+                return (candidate, None) if candidate.is_dir() else (None, "移动目标不是目录。")
+            except OSError as exc:
+                return None, path_error(exc)
+        base: Path | None = None
+        tail = destination
+        for alias, directory in _FILE_LOCATION_ALIASES:
+            if destination.casefold().startswith(alias.casefold()):
+                base = Path.home() / directory
+                tail = destination[len(alias) :]
+                break
+        if base is None and move is None:
+            return None, None
+        tail = re.sub(r"^(?:上的|里面的|里的|下的|的|上(?=[A-Za-z0-9_/]|$)|里$)", "", tail).strip()
+        if tail.startswith("的"):
+            tail = tail[1:].strip()
+        tail = tail.strip(" /\\`\"'")
+        # Prefer a literal existing directory name, including spaces and Chinese particles.
+        if base is not None:
+            try:
+                literal = canonical_path(base / tail)
+                if literal.is_dir():
+                    return literal, None
+            except OSError as exc:
+                return None, path_error(exc)
+        parts = [
+            part.strip(" /\\`\"'")
+            for part in re.split(r"(?:文件夹|目录)?(?:里面的|里的|下的|的)|[/\\]", tail)
+            if part.strip()
+        ]
+        if any(part in {".", ".."} for part in parts):
+            return None, "请提供不含上级跳转的目标目录。"
+        if base is not None:
+            try:
+                candidate = canonical_path(base.joinpath(*parts))
+                candidate.stat()
+                if candidate.is_dir():
+                    return candidate, None
+                return None, f"移动目标不是目录：{candidate}"
+            except OSError as exc:
+                return None, path_error(exc)
+        if not parts:
+            return None, None
+        direct_matches: set[Path] = set()
+        for directory in ("Desktop", "Documents", "Downloads", ""):
+            try:
+                candidate = canonical_path((Path.home() / directory).joinpath(*parts))
+                if candidate.is_dir():
+                    direct_matches.add(candidate)
+            except OSError:
+                continue
+        if len(direct_matches) == 1:
+            return next(iter(direct_matches)), None
+        if direct_matches:
+            return None, "找到多个目标目录，请选择完整路径：\n" + "\n".join(
+                map(str, sorted(direct_matches))
+            )
+        finder = FileFindTool()
+        result = finder.execute(
+            ToolContext(data_dir="data", actor="whitenight"),
+            finder.validate(
+                {
+                    "names": [parts[0]],
+                    "entry_type": "directory",
+                    "match_mode": "exact",
+                    "root": str(Path.home()),
+                    "timeout_seconds": 5,
+                }
+            ),
+        )
+        matches: set[Path] = set()
+        for source in result.sources:
+            try:
+                candidate = canonical_path(Path(source.uri).joinpath(*parts[1:]))
+                if candidate.is_dir():
+                    matches.add(candidate)
+            except OSError:
+                continue
+        if len(matches) == 1:
+            return next(iter(matches)), None
+        if matches:
+            return None, "找到多个目标目录，请选择完整路径：\n" + "\n".join(
+                map(str, sorted(matches))
+            )
+        if not result.ok or result.metadata.get("partial"):
+            return None, "目标目录搜索未完成或有位置不可访问，请补充所在位置（例如桌面）。"
+        return None, "未找到匹配目录，请补充所在位置或完整路径。"
 
     @staticmethod
     def _file_disambiguation_reply(result: ToolResult) -> str:
@@ -130,6 +237,8 @@ class FileTaskCoordinator:
         text = request_text.strip()
         if _FILE_SEND_INTENT_RE.search(text) and _FILE_CONTEXT_RE.search(text):
             return True
+        if FileTaskCoordinator._is_file_location_followup(text, history):
+            return True
         if FileTaskCoordinator._is_file_selection_followup(text, history):
             return True
         if not _SHORT_FILE_SEND_RE.fullmatch(text):
@@ -143,6 +252,25 @@ class FileTaskCoordinator:
             _FILE_SEND_INTENT_RE.search(content) and _FILE_CONTEXT_RE.search(content)
             for content in recent_user_text
         )
+
+    @staticmethod
+    def _is_file_location_followup(request_text: str, history: list[MessageRecord]) -> bool:
+        """A directory clarification continues only the immediately pending file search."""
+        text = request_text.strip()
+        previous = next(
+            (m for m in reversed(history[:-1]) if m.role in {"user", "assistant"}), None
+        )
+        if previous is None or previous.role != "assistant":
+            return False
+        if not previous.content.startswith(_FILE_DISAMBIGUATION_PREFIX):
+            return False
+        if re.search(r"取消|算了|不用|不要|别发|删除|删掉|移动|移到|放到|搬到", text):
+            return False
+        location = re.sub(r"^(?:在|位于)\s*", "", text)
+        return any(
+            location.casefold().startswith(alias.casefold())
+            for alias, _directory in _FILE_LOCATION_ALIASES
+        ) or bool(re.fullmatch(r"[^\n，,。！？!?]+(?:文件夹|目录)(?:里|下|中)?[。.]?", location))
 
     @staticmethod
     def _is_file_selection_followup(request_text: str, history: list[MessageRecord]) -> bool:

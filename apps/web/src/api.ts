@@ -453,6 +453,11 @@ export async function exportMemory(format: 'markdown' | 'jsonl'): Promise<void> 
   URL.revokeObjectURL(url)
 }
 
+export const approveBatch = (sessionId: string, codes: string[]) =>
+  jsonFetch<{ ok: boolean; reason: string; results: { code: string; status: string; message: string }[] }>(
+    '/api/v1/approvals/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, codes }) })
+
 // --- tasks / approvals / policy / system ---
 export const fetchTasks = (sessionId?: string) =>
   jsonFetch<TaskRecord[]>(sessionId ? `/api/v1/tasks?session_id=${sessionId}` : '/api/v1/tasks')
@@ -611,3 +616,13 @@ export async function downloadBackup(id: string): Promise<void> {
 
 export const fetchQQMessageWindow = () => jsonFetch<{ seconds: number }>('/api/v1/onebot/config')
 export const updateQQMessageWindow = (seconds: number) => jsonFetch<{ seconds: number }>('/api/v1/onebot/config', { method: 'PUT', body: JSON.stringify({ seconds }) })
+
+export interface FileAccessStatus {
+  application: string
+  dedicated_launcher: boolean
+  note: string
+  settings_url: string
+  results: { path: string; status: string; message?: string; writable?: boolean }[]
+}
+export const fetchFileAccess = () => jsonFetch<FileAccessStatus>('/api/v1/system/file-access')
+export const probeFileAccess = () => jsonFetch<FileAccessStatus>('/api/v1/system/file-access/probe', { method: 'POST' })

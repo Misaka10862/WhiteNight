@@ -15,6 +15,7 @@ from whitenight.policy.approvals import ApprovalService, Resolution
 from whitenight.policy.audit import AuditService
 from whitenight.policy.engine import ApprovalMode, PolicyEngine
 from whitenight.tools.base import FileDeliveryProvider, ToolContext, ToolRegistry, ToolResult
+from whitenight.tools.paths import path_error
 
 
 @dataclass
@@ -87,6 +88,10 @@ class ToolExecutor:
             )
             return ExecutionOutcome(status="refused", message=decision.reason)
 
+        if tool_name.startswith("file.") and approval_id is None and approval_code is None:
+            params = {
+                key: value for key, value in params.items() if not key.startswith("approved_")
+            }
         try:
             validated = tool.validate(params)
         except ValidationError as exc:
@@ -122,6 +127,8 @@ class ToolExecutor:
                 approval_summary = approval_metadata.get("approval_summary")
                 if isinstance(approval_summary, dict):
                     summary = summarize_params(approval_summary)
+            except OSError as exc:
+                return ExecutionOutcome(status="refused", message=path_error(exc))
             except (ValidationError, ValueError) as exc:
                 return ExecutionOutcome(status="refused", message=f"参数不合法：{exc}")
 
@@ -181,6 +188,10 @@ class ToolExecutor:
                     channel_target=channel_target,
                     params=bound_params,
                 )
+                if request.status != "pending":
+                    return ExecutionOutcome(
+                        status="refused", message="操作已领取或结果待核验，不会重复执行。"
+                    )
                 return ExecutionOutcome(
                     status="waiting_approval",
                     message=f"{tool_name} 需要审批，可选择单次或会话授权",
@@ -201,6 +212,10 @@ class ToolExecutor:
                     channel_target=channel_target,
                     params=bound_params,
                 )
+                if request.status != "pending":
+                    return ExecutionOutcome(
+                        status="refused", message="操作已领取或结果待核验，不会重复执行。"
+                    )
                 return ExecutionOutcome(
                     status="waiting_approval",
                     message=f"{tool_name} 需要逐次审批",

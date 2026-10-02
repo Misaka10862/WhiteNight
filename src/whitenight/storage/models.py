@@ -81,7 +81,13 @@ class Approval(Base):
     """一次性审批请求：短期、不可重放（构建计划第 9.2 节）。"""
 
     __tablename__ = "approvals"
-    __table_args__ = (Index("ix_approvals_code", "code", unique=True),)
+    __table_args__ = (
+        Index("ix_approvals_code", "code", unique=True),
+        Index("ix_approvals_active_key", "active_key", unique=True),
+    )
+
+    active_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    presented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(16), nullable=False)

@@ -3,6 +3,11 @@
 > This file is updated with each build: recording completed, incomplete, issues and next steps.
 > Build outline: `buildplan.md`. Phase conclusions and measured evidence can be found in `docs/reports/`.
 
+## 2026-09-18 — Agent instruction compatibility pointer
+
+- Added root `CLAUDE.md` containing only `@AGENTS.md`, so Claude-compatible tooling follows the existing project agent rules without duplicating them.
+- Verification: exact file-content and repository diff/status checks passed. No runtime code, dependencies, tests, or existing user changes were modified.
+
 Last update: 2026-09-04 (architecture hardening implemented and verified)
 
 ## 2026-09-08 plain file-move confirmation
@@ -553,3 +558,107 @@ uv run scripts/verify_phase1.py --smoke-model --smoke-gateway
   Runtime version is 0.1.0 and the active QQ collection window is 2.0 seconds.
 - Poke and duplicate-delivery regressions use controlled contract transports; no
   synthetic messages were sent to the real QQ account during verification.
+
+## 2026-09-14 — File discovery, approval flow and macOS service identity
+
+- Attribution: deterministic defects confirmed from the 15:52–15:57 CST conversation,
+  audit and pending-call records. Directory searches only scanned files; approval
+  parsing required a space before codes and lacked an all-approval command; status
+  questions ignored persisted pending state. Five approvals represented one move.
+  Repetitive fuzzy search and incorrect absence claims are separate model limits.
+- Added directory-aware lookup, exact destination hierarchy resolution, filesystem
+  case-alias normalization, error distinctions and truthful operation receipts.
+  QQ/Web commands share deterministic parsing before model invocation. Repeated
+  requests reuse durable identities; atomic claims prevent concurrent execution.
+  All-approval freezes current presented requests, applies original bindings and
+  returns per-item results. Changed pending moves supersede prior requests.
+- Added batch approval API/Web controls and startup reconciliation: interrupted
+  actions use audit evidence or remain awaiting review, never blindly replay.
+  Migration 0013 provides upgrade/downgrade and invalidates expired/duplicate legacy
+  requests without removing evidence; existing verified pre-upgrade backups apply.
+- Built a dedicated signed WhiteNight app and launchd installer with preserved
+  rollback configuration. Python-only changes reuse the native app. Full Disk Access
+  remains a one-time user action, with renewed consent possible after native updates.
+  Added an on-demand access probe in the actual service and a Permissions-page entry.
+- No package dependencies changed. Added incident regressions; full check and runtime
+  validation results follow below. Details: `docs/reports/file-operations-2026-09-14.md`.
+
+### Verification and deployment
+
+- `./scripts/check.sh` passed: 373 Python tests passed, 4 environment-dependent tests
+  skipped; Ruff, strict mypy, credential scan, 13 frontend tests, lint/build and
+  technical-English audit passed. An additional migration roundtrip test also passed
+  and verifies the pre-migration backup and preserved duplicate evidence.
+- The native app was compiled, signed and verified; rebuilding unchanged source
+  successfully reused the signed bundle. Build metadata is sealed under Resources.
+- Live deployment at approximately 16:48 CST: launchd runs the dedicated WhiteNight
+  app with one Python child, `/healthz` returns HTTP 200, and migration version is
+  0013. The five incident approvals are revoked. The existing startup mechanism
+  created a verified pre-migration backup. Previous launchd plists were preserved
+  under `~/Library/Logs/WhiteNight` for rollback.
+- Initial launchd bootstrap hit an asynchronous bootout/unload race. Both the
+  initial registration and immediate rollback were rejected; after confirming the
+  old job had exited, adding bounded waits/retries restored service successfully.
+  This was a deployment timing defect, separate from model or filesystem behavior.
+- An on-demand probe in the live Python child confirmed Desktop, Documents and
+  Downloads are readable with writable permission flags. The mounted Macintosh HD
+  root is readable and not writable. These results do not claim access to every
+  protected file or prove the global Full Disk Access switch is enabled. The exact
+  WhiteNight application and macOS privacy settings were opened for the user's
+  one-time grant; no TCC database, system permissions or protection settings were
+  modified by the agent.
+- Browser inspection confirmed the live batch-approval and file-access panels
+  render correctly. No real QQ messages or expired user file moves were executed.
+
+- Final verification: `./scripts/check.sh` passed with **378 Python tests passed,
+  4 skipped**, plus the 13 frontend tests and all lint/type/build/security checks.
+  Added QQ collection-window bypass, delegated-request isolation and multi-file
+  model-batch regressions. Move batches expose their approvals together; model-led
+  work resumes once with the batch results, while direct attachment moves use a
+  deterministic completion receipt. Repeated approval presentation is deduplicated.
+- Final service restart at 16:56 CST reused the same signed native bundle and
+  succeeded with the bounded launchd shutdown wait. `/healthz` returned HTTP 200.
+  The restarted service's directory probe completed in 0.019 seconds with the same
+  Desktop/Documents/Downloads access results; its Python process has the WhiteNight
+  native launcher as parent. The verified 0012 pre-migration backup is present.
+
+## 2026-09-24 — Resume file delivery after a directory clarification
+
+- Attribution: deterministic orchestration defect, reproduced with the exact
+  incident dialogue in a failing contract test before implementation changes.
+  At 01:30–01:32 CST the first home-wide search returned incomplete/no matches;
+  the user's directory clarification then found `en.pdf`, but the intent gate
+  removed `channel.file.send` from that turn's advertised tools. Audit records
+  contain successful discovery and no upload attempt. The model's report that
+  sending was unavailable reflected the actual tool list; this failure was not
+  an upload transport error or a demonstrated model capability limitation.
+- Recognize location clarifications immediately following a file-disambiguation
+  reply, retain the send goal, and instruct a fresh search with the original
+  filename/count rather than restricting execution to the previous empty list.
+  Resolve existing nested Chinese directory hints before falling back to Desktop.
+  The trusted target, parameter validation, policy checks and delivery Provider
+  remain in the existing execution path. Unrelated turns and cancellation do not
+  inherit this new continuation behavior.
+- Regression uses the incident wording, an isolated file tree, a controlled model
+  and fake delivery; it verifies tool advertisement, narrowed search, delivery,
+  cancellation and channel isolation without sending a real QQ message.
+  Focused checks: 25 tests passed. No dependencies changed.
+- Full verification: `./scripts/check.sh` passed (380 Python tests passed,
+  4 environment-dependent skips, 13 frontend tests, lint/type/build/security and
+  technical-English checks). Service restarted gracefully at 01:36 CST, reused
+  the existing signed app, and `/healthz` returned HTTP 200. Real QQ file upload
+  was not replayed automatically; regression delivery used a fake Provider.
+
+## 2026-10-03 — Commit pending local changes and consolidate branches
+
+- At the user's request, include all pending source changes for directory discovery,
+  approval selection/deduplication, durable file-operation recovery, the native macOS
+  launcher and resumed file delivery after clarification. Their original incident
+  attribution and verification remain recorded in the September entries above.
+- Before committing, `./scripts/check.sh` passed: **380 Python tests passed, 4 skipped**,
+  **13 frontend tests passed**, plus formatting, lint, strict types, build, credential
+  scan and technical-English checks. Dependencies and production data are unchanged.
+- The runtime-reliability PR will be merged with this verified baseline, preserving
+  both sets of changes. The old `backup/pre-english-feat-20260902` branch has the same
+  tree as `cb86055`, already an ancestor of `main`, and every rewritten patch has an
+  equivalent in `main`; it contains no source change needing another merge.

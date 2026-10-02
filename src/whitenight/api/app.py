@@ -24,6 +24,7 @@ from whitenight.api.personality_routes import register_personality_routes
 from whitenight.api.resources import resource_router
 from whitenight.api.schemas import (
     ApprovalAction,
+    ApprovalBatchAction,
     ModelKeepAliveUpdate,
     ModelListRequest,
     ModelProviderUpdate,
@@ -67,6 +68,7 @@ from whitenight.scheduler.types import (
 )
 from whitenight.storage.engine import backend_of, ping
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
+from whitenight.tools.file_access import file_access_status
 
 _MODEL_KEEP_ALIVE_OPTIONS = ("-1", "5m", "30m", "1h", "6h", "12h")
 _MODEL_PROVIDERS = ("ollama", "openai")
@@ -230,11 +232,29 @@ def create_app(
         service: ApprovalService = app.state.approvals
         return [item.__dict__ for item in service.list_pending()]
 
+    @app.post("/api/v1/approvals/batch")
+    async def batch_approvals(payload: ApprovalBatchAction) -> dict[str, object]:
+        app.state.store.get_session(payload.session_id)
+        events = await app.state.chat_service.decide_approvals(
+            payload.codes,
+            payload.session_id,
+            ChannelContext(channel="web"),
+            allow=payload.allow,
+        )
+        final = events[-1]
+        return {
+            "ok": (final.extra or {}).get("ok", False),
+            "reason": final.text or final.message or "审批未完成",
+            "results": (final.extra or {}).get("results", []),
+        }
+
     @app.post("/api/v1/approvals/{code}/approve")
     async def approve_request(code: str, payload: ApprovalAction) -> dict[str, object]:
         service: ApprovalService = app.state.approvals
         pending = app.state.pending_tools.get_by_code(code)
         if pending is not None:
+            if payload.session_id != pending.session_id:
+                return {"ok": False, "reason": "审批编号不属于当前会话"}
             events = await app.state.chat_service.resume_approval(
                 code,
                 ChannelContext(channel="web"),
@@ -242,13 +262,17 @@ def create_app(
             )
             final = events[-1] if events else ChatEvent(type="error", message="审批恢复无结果")
             return {
-                "ok": final.type != "error",
+                "ok": (final.extra or {}).get("ok", False),
                 "reason": final.message or final.text or "已执行",
                 "scope": payload.scope,
-                "execution_status": "succeeded" if final.type != "error" else "failed",
+                "execution_status": ((final.extra or {}).get("results") or [{}])[0].get(
+                    "status", "failed"
+                ),
                 "message_id": final.message_id,
             }
         pending_items = [item for item in service.list_pending() if item.code == code]
+        if pending_items and pending_items[0].channel != "web":
+            return {"ok": False, "reason": "审批编号不属于当前渠道"}
         if pending_items and pending_items[0].tool_name == "delegate.hermes.action":
             hermes = app.state.delegate_manager.providers().get("hermes")
             responder = getattr(hermes, "respond_approval", None)
@@ -280,6 +304,8 @@ def create_app(
             )
             return {"ok": reason == "已拒绝", "reason": reason}
         pending_items = [item for item in service.list_pending() if item.code == code]
+        if pending_items and pending_items[0].channel != "web":
+            return {"ok": False, "reason": "审批编号不属于当前渠道"}
         if pending_items and pending_items[0].tool_name == "delegate.hermes.action":
             hermes = app.state.delegate_manager.providers().get("hermes")
             responder = getattr(hermes, "respond_approval", None)
@@ -287,6 +313,14 @@ def create_app(
             return {"ok": ok, "reason": "已拒绝 Hermes 操作" if ok else "拒绝失败"}
         resolution = service.reject(code)
         return {"ok": resolution.ok, "reason": resolution.reason}
+
+    @app.get("/api/v1/system/file-access")
+    async def file_access() -> dict[str, object]:
+        return file_access_status()
+
+    @app.post("/api/v1/system/file-access/probe")
+    async def probe_file_access() -> dict[str, object]:
+        return await asyncio.to_thread(file_access_status, probe=True)
 
     @app.get("/api/v1/policy/rules")
     async def policy_rules() -> list[dict[str, str]]:

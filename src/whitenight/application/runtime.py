@@ -139,6 +139,7 @@ async def runtime_lifespan(
         tool_registry = ToolRegistry(registered_tools)
         tool_executor = ToolExecutor(tool_registry, policy, approvals, audit)
         pending_tools = PendingToolStore(engine)
+        pending_tools.recover()
         extractor = memory_extractor or _build_memory_extractor(settings, provider)
         embedding_provider = (
             OllamaEmbeddingProvider(settings.ollama_base_url, settings.embedding_model)

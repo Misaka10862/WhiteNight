@@ -31,6 +31,7 @@ from whitenight.config import Settings
 from whitenight.personality.store import PersonalityStore
 from whitenight.policy.approvals import ApprovalService
 from whitenight.policy.audit import AuditService
+from whitenight.policy.commands import parse_approval_command
 from whitenight.stickers.catalog import StickerCatalog
 from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionStore
@@ -39,9 +40,6 @@ logger = logging.getLogger(__name__)
 
 MAX_QQ_FILE_BYTES = 16 * 1024 * 1024
 
-_APPROVE_RE = re.compile(r"^(?:同意|批准|允许)\s+([A-Za-z0-9_-]{6,16})$")
-_REJECT_RE = re.compile(r"^(?:拒绝|不同意)\s+([A-Za-z0-9_-]{6,16})$")
-_APPROVAL_WITHOUT_CODE_RE = re.compile(r"^(?:同意|批准|允许|允许操作)[！!。.]?$")
 _CHARACTER_RE = re.compile(r"^/角色(?:\s+(.+))?$")
 
 
@@ -182,11 +180,7 @@ class OneBotAdapter:
             return {"status": "duplicate"}
 
         raw_text = parse_segments(event).text.strip()
-        if (
-            _APPROVE_RE.match(raw_text)
-            or _REJECT_RE.match(raw_text)
-            or _APPROVAL_WITHOUT_CODE_RE.match(raw_text)
-        ):
+        if parse_approval_command(raw_text) is not None:
             return await self._process_owner_message(event)
         if parse_segments(event).empty:
             return {"status": "ignored_empty"}
@@ -543,110 +537,23 @@ class OneBotAdapter:
     async def _handle_approval_command(
         self, event: OneBotPrivateMessageEvent, text: str, session_id: str
     ) -> dict[str, object] | None:
-        approve_match = _APPROVE_RE.match(text.strip())
-        reject_match = _REJECT_RE.match(text.strip())
-        if not approve_match and not reject_match:
-            if _APPROVAL_WITHOUT_CODE_RE.fullmatch(text.strip()):
-                pending = [
-                    item
-                    for item in self._approvals.list_pending()
-                    if item.session_id == session_id and item.channel == "onebot"
-                ]
-                if len(pending) == 1:
-                    code = pending[0].code
-                    if pending[0].tool_name == "file.move":
-                        return await self._handle_approval_command(
-                            event, f"同意 {code}", session_id
-                        )
-                    await self._send(
-                        event.user_id,
-                        f"审批必须带一次性编号。请回复：同意 {code}，或：拒绝 {code}。",
-                    )
-                    return {"status": "approval_code_required"}
-                if len(pending) > 1:
-                    choices = "；".join(f"{item.tool_name}：{item.code}" for item in pending)
-                    await self._send(
-                        event.user_id,
-                        f"有多个待审批操作，请带编号回复“同意 <编号>”或“拒绝 <编号>”：{choices}",
-                    )
-                    return {"status": "approval_code_required"}
-                await self._send(event.user_id, "当前没有有效的待审批操作，请重新发起文件操作。")
-                return {"status": "approval_invalid"}
+        events = await self._chat.handle_approval_command(
+            text, session_id, ChannelContext(channel="onebot", target=str(event.user_id))
+        )
+        if events is None:
             return None
-        match = approve_match if approve_match else reject_match
-        assert match is not None
-        code = match.group(1)
-        pending = [item for item in self._approvals.list_pending() if item.code == code]
-        if not pending:
-            await self._send(event.user_id, "审批编号无效、已过期或已处理")
-            return {"status": "approval_invalid"}
-
-        item = pending[0]
-        if item.tool_name == "delegate.hermes.action":
-            delegates = self._chat._delegates
-            hermes = delegates.providers().get("hermes") if delegates else None
-            responder = getattr(hermes, "respond_approval", None)
-            ok = bool(responder and await responder(code, bool(approve_match)))
-            await self._send(
-                event.user_id,
-                (
-                    "已批准并恢复 Hermes"
-                    if ok and approve_match
-                    else "已拒绝 Hermes 操作"
-                    if ok
-                    else "Hermes 审批无法恢复"
-                ),
+        final = events[-1] if events else None
+        await self._send(
+            event.user_id, (final.text or final.message or "审批已处理") if final else "审批未完成"
+        )
+        ok = final is not None and final.type == "done" and (final.extra or {}).get("ok", True)
+        return {
+            "status": (final.extra or {}).get(
+                "command_status", "approval_handled" if ok else "approval_failed"
             )
-            return {"status": "approval_handled" if ok else "approval_failed"}
-        if approve_match:
-            continuation = (
-                self._chat._pending_tools.get_by_code(code) if self._chat._pending_tools else None
-            )
-            if continuation is not None:
-                events = await self._chat.resume_approval(
-                    code,
-                    ChannelContext(channel="onebot", target=str(event.user_id)),
-                )
-                final = events[-1] if events else None
-                if final is not None and final.type == "done":
-                    await self._send(event.user_id, final.text or "操作已完成")
-                    return {"status": "approval_handled"}
-                await self._send(
-                    event.user_id,
-                    f"审批后执行失败：{(final.message if final else None) or '未知错误'}",
-                )
-                return {"status": "approval_failed"}
-            resolution = self._approvals.resolve_once(
-                code,
-                session_id=item.session_id,
-                expected_scope=item.scope,
-                grant_scope="once",
-                channel="onebot",
-                channel_target=str(event.user_id),
-            )
-            await self._send(
-                event.user_id,
-                f"已批准 {item.tool_name}（{item.risk}，{item.scope}）"
-                if resolution.ok
-                else f"审批失败：{resolution.reason}",
-            )
-        else:
-            continuation = (
-                self._chat._pending_tools.get_by_code(code) if self._chat._pending_tools else None
-            )
-            if continuation is not None:
-                reason = await self._chat.reject_approval(
-                    code,
-                    ChannelContext(channel="onebot", target=str(event.user_id)),
-                )
-                await self._send(event.user_id, reason)
-                return {"status": "approval_handled"}
-            resolution = self._approvals.reject(code)
-            await self._send(
-                event.user_id,
-                f"已拒绝 {item.tool_name}" if resolution.ok else f"拒绝失败：{resolution.reason}",
-            )
-        return {"status": "approval_handled"}
+            if final
+            else "approval_failed"
+        }
 
     async def _send(self, user_id: int, text: str) -> None:
         try:

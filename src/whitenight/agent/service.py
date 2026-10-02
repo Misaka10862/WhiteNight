@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Literal
@@ -48,6 +47,7 @@ from whitenight.models.base import (
 from whitenight.personality.compiler import PromptCompiler
 from whitenight.personality.store import PersonalityStore
 from whitenight.policy.approvals import ApprovalService
+from whitenight.policy.commands import is_operation_status, parse_approval_command
 from whitenight.policy.engine import ApprovalMode, PolicyEngine
 from whitenight.routing.engine import RoutingEngine
 from whitenight.routing.models import ExecutorChoice
@@ -58,7 +58,7 @@ from whitenight.storage.attachments import save_image_data_url
 from whitenight.storage.sessions import SessionNotFoundError, SessionStore
 from whitenight.tools.base import FileDeliveryProvider, ToolRegistry
 from whitenight.tools.executor import ExecutionOutcome, ToolExecutor
-from whitenight.tools.pending import PendingToolStore, params_digest
+from whitenight.tools.pending import PendingToolRecord, PendingToolStore, params_digest
 
 logger = logging.getLogger(__name__)
 
@@ -213,30 +213,22 @@ class ChatService:
             self._proactive.mark_activity()
         yield ChatEvent(type="start", session_id=session_id)
 
-        if (
-            trusted_channel.channel == "web"
-            and not request.image_data_url
-            and not request.attachment_ids
-            and re.fullmatch(r"(?:同意|批准|允许|允许操作)[！!。.]?", request.text.strip())
-            and self._approvals is not None
-        ):
-            pending = [
-                item
-                for item in self._approvals.list_pending()
-                if item.session_id == session_id and item.channel == trusted_channel.channel
-            ]
-            if len(pending) == 1 and pending[0].tool_name == "file.move":
-                for event in await self.resume_approval(pending[0].code, trusted_channel):
+        if not request.image_data_url and not request.attachment_ids:
+            approval_events = await self.handle_approval_command(
+                request.text, session_id, trusted_channel
+            )
+            if approval_events is not None:
+                for event in approval_events:
                     yield event
                 return
-            reply = (
-                "当前没有有效的待审批文件移动。"
-                if not pending
-                else "请在审批面板中选择要批准的操作。"
-            )
-            message = self._persist_assistant(session_id, reply)
-            yield ChatEvent(type="done", session_id=session_id, message_id=message.id, text=reply)
-            return
+            if is_operation_status(request.text):
+                status_reply = self.operation_status(session_id, trusted_channel)
+                if status_reply:
+                    message = self._persist_assistant(session_id, status_reply)
+                    yield ChatEvent(
+                        type="done", session_id=session_id, message_id=message.id, text=status_reply
+                    )
+                    return
 
         plan = await self._router.route(request.text, has_image=image_path is not None)
         codex_prompt = extract_codex_prompt(request.text)
@@ -305,6 +297,11 @@ class ChatService:
                     "服务端会在文字之后发送 QQ 原生动画表情。只可选择下列 ID，不要臆造 ID：\n"
                     + self._sticker_catalog.prompt_text(native_only=True)
                 )
+            runtime_constraints.append(
+                "查找移动目的地必须使用 file.find 的 entry_type=directory。"
+                "先核验明确路径和目录层级，优先精确匹配；不把权限拒绝、超时或部分结果称为不存在。"
+                "审批与执行状态以服务端结果为准，等待审批不能声称已完成。"
+            )
             recent_attachment = self._files._recent_qq_attachment(history)
             if recent_attachment is not None:
                 attachment_name, attachment_path = recent_attachment
@@ -335,10 +332,23 @@ class ChatService:
                 return
             if (
                 recent_attachment is not None
+                and self._tools is not None
+                and self._tools.get("file.move") is not None
                 and _FILE_MOVE_INTENT_RE.search(request.text)
                 and _FILE_CONTEXT_RE.search(request.text)
             ):
-                destination_dir = self._files._file_search_root_hint(request.text)
+                destination_dir, destination_error = await asyncio.to_thread(
+                    self._files.move_destination, request.text
+                )
+                if destination_error:
+                    message = self._persist_assistant(session_id, destination_error)
+                    yield ChatEvent(
+                        type="done",
+                        session_id=session_id,
+                        message_id=message.id,
+                        text=destination_error,
+                    )
+                    return
                 if (
                     destination_dir is not None
                     and destination_dir.is_dir()
@@ -378,13 +388,15 @@ class ChatService:
                             assistant_content="",
                         )
                         reply = (
-                            f"已定位附件：{attachment_path.name}\n"
+                            f"已定位附件：{_attachment_name}\n"
                             f"目标目录：{destination_dir}\n\n"
                             + approval_prompt("file.move", move_outcome.approval_code)
                         )
                     else:
                         reply = move_outcome.message
                     message = self._persist_assistant(session_id, reply)
+                    if self._approvals and move_outcome.approval_code:
+                        self._approvals.mark_presented([move_outcome.approval_code])
                     yield ChatEvent(
                         type="done",
                         session_id=session_id,
@@ -393,7 +405,13 @@ class ChatService:
                         extra={"user_message_id": user_message.id},
                     )
                     return
-            if self._files._is_file_selection_followup(request.text, history):
+            if self._files._is_file_location_followup(request.text, history):
+                runtime_constraints.append(
+                    "用户正在补充上一轮文件发送任务的搜索目录。保留原请求的文件名和数量，"
+                    "用补充的位置重新调用 file.find；找到唯一匹配后调用 channel.file.send。"
+                    "若仍有歧义，继续确认，不要发送整个目录或无关文件。"
+                )
+            elif self._files._is_file_selection_followup(request.text, history):
                 runtime_constraints.append(
                     "用户正在回答上一轮由服务端生成的文件候选确认。只从上一轮"
                     "列出的候选中解析用户选择的序号、文件名或完整路径，并立即调用 "
@@ -718,6 +736,21 @@ class ChatService:
                     )
                     return
                 if waiting:
+                    waiting = list(
+                        {outcome.approval_id: (call, outcome) for call, outcome in waiting}.values()
+                    )
+                    approval_service = self._tool_executor._approvals
+                    active_ids = {
+                        item.id
+                        for item in approval_service.for_context(
+                            session_id, trusted_channel.channel, trusted_channel.target
+                        )
+                    }
+                    waiting = [
+                        (call, outcome)
+                        for call, outcome in waiting
+                        if outcome.approval_id in active_ids
+                    ]
                     approval_lines: list[str] = []
                     for call, outcome in waiting:
                         if outcome.approval_id is None or self._pending_tools is None:
@@ -736,11 +769,24 @@ class ChatService:
                             params=pending_params,
                             assistant_content="".join(turn_parts),
                         )
-                        approval_lines.append(approval_prompt(call.name, outcome.approval_code))
-                    approval_text = "\n".join(approval_lines)
+                        approval_lines.append(
+                            approval_prompt(call.name, outcome.approval_code, outcome.metadata)
+                        )
+                    approval_text = (
+                        "\n".join(dict.fromkeys(approval_lines))
+                        or "审批已被新请求替代，请查看当前待审批操作。"
+                    )
                     reply = "".join(text_parts).strip()
                     reply = f"{reply}\n\n{approval_text}".strip()
                     assistant_message = self._persist_assistant(session_id, reply)
+                    if self._approvals:
+                        self._approvals.mark_presented(
+                            [
+                                outcome.approval_code
+                                for _, outcome in waiting
+                                if outcome.approval_code
+                            ]
+                        )
                     for call, outcome in waiting:
                         yield ChatEvent(
                             type="approval",
@@ -804,110 +850,326 @@ class ChatService:
             extra={"user_message_id": user_message.id, "sticker_ids": selected_sticker_ids},
         )
 
+    async def handle_approval_command(
+        self, text: str, session_id: str, channel: ChannelContext
+    ) -> list[ChatEvent] | None:
+        command = parse_approval_command(text)
+        if command is None or self._approvals is None:
+            return None
+        pending = self._approvals.for_context(
+            session_id, channel.channel, channel.target, presented_only=command.all_pending
+        )
+        if command.code:
+            codes = [command.code]
+        elif command.all_pending or len(pending) == 1:
+            codes = [item.code for item in pending]
+        else:
+            codes = []
+        if not codes:
+            reply = (
+                "当前没有有效的待审批操作。"
+                if not pending
+                else "有多个待审批操作，请回复“全部同意”，或“同意 编号”：\n"
+                + "\n".join(f"{item.tool_name}：{item.code}" for item in pending)
+            )
+            message = self._persist_assistant(session_id, reply)
+            return [
+                ChatEvent(
+                    type="done",
+                    session_id=session_id,
+                    message_id=message.id,
+                    text=reply,
+                    extra={
+                        "command_status": "approval_invalid"
+                        if not pending
+                        else "approval_code_required"
+                    },
+                )
+            ]
+        return await self.decide_approvals(codes, session_id, channel, allow=command.allow)
+
+    async def decide_approvals(
+        self,
+        codes: list[str],
+        session_id: str,
+        channel: ChannelContext,
+        *,
+        allow: bool = True,
+        grant_scope: Literal["once", "session"] = "once",
+    ) -> list[ChatEvent]:
+        """Resolve a frozen selection; never recursively approve newly created requests."""
+        if self._approvals is None:
+            return [ChatEvent(type="error", message="审批服务未配置")]
+        available = {
+            item.code: item
+            for item in self._approvals.for_context(session_id, channel.channel, channel.target)
+        }
+        results: list[dict[str, object]] = []
+        completed: list[tuple[PendingToolRecord, ExecutionOutcome]] = []
+        # A failed predecessor conservatively stops later work, never implies rollback.
+        blocked = False
+        selected_codes = sorted(
+            dict.fromkeys(codes),
+            key=lambda code: (
+                (available[code].created_at.isoformat(), code) if code in available else ("~", code)
+            ),
+        )
+        for code in selected_codes:
+            item = available.get(code)
+            if item is None:
+                results.append(
+                    {
+                        "code": code,
+                        "status": "invalid",
+                        "message": "审批无效、已过期或不属于当前会话",
+                    }
+                )
+                blocked = True
+                continue
+            if blocked and allow:
+                results.append(
+                    {"code": code, "status": "blocked", "message": "前序操作失败，保留待审批"}
+                )
+                continue
+            pending = self._pending_tools.get_by_code(code) if self._pending_tools else None
+            if item.tool_name == "delegate.hermes.action":
+                hermes = self._delegates.providers().get("hermes") if self._delegates else None
+                responder = getattr(hermes, "respond_approval", None)
+                ok = bool(responder and await responder(code, allow))
+                status = ("running" if allow else "rejected") if ok else "failed"
+                detail = (
+                    "已批准并恢复 Hermes"
+                    if ok and allow
+                    else "已拒绝 Hermes 操作"
+                    if ok
+                    else "Hermes 审批无法恢复"
+                )
+            elif not allow:
+                resolution = self._approvals.reject(code)
+                ok, detail = resolution.ok, resolution.reason
+                status = "rejected" if ok else "failed"
+                if ok and pending and self._pending_tools:
+                    self._pending_tools.update(pending.id, "rejected")
+            elif (
+                pending is not None and self._pending_tools and self._tool_executor and self._policy
+            ):
+                if (
+                    pending.session_id != session_id
+                    or pending.channel != channel.channel
+                    or pending.channel_target != channel.target
+                    or params_digest(pending.params) != pending.params_digest
+                ):
+                    ok, status, detail = False, "failed", "待执行上下文或参数校验失败"
+                    self._approvals.invalidate(code)
+                    self._pending_tools.update(pending.id, "failed", error=detail)
+                elif not self._pending_tools.claim(pending.id):
+                    ok, status, detail = False, "unavailable", "操作已领取或已处理，不会重复执行"
+                else:
+                    decision = self._policy.evaluate(pending.tool_name)
+                    resolution = self._approvals.approve(
+                        code,
+                        session_id=session_id,
+                        expected_scope="session"
+                        if decision.mode is ApprovalMode.SESSION
+                        else "once",
+                        grant_scope=grant_scope,
+                        channel=channel.channel,
+                        channel_target=channel.target,
+                    )
+                    if not resolution.ok:
+                        self._approvals.invalidate(code)
+                        self._pending_tools.update(pending.id, "failed", error=resolution.reason)
+                        ok, status, detail = False, "failed", resolution.reason
+                    else:
+
+                        async def execute_and_record(record: PendingToolRecord) -> ExecutionOutcome:
+                            assert (
+                                self._tool_executor is not None and self._pending_tools is not None
+                            )
+                            outcome = await asyncio.to_thread(
+                                self._tool_executor.execute,
+                                record.tool_name,
+                                record.params,
+                                session_id=session_id,
+                                channel=channel.channel,
+                                channel_target=channel.target,
+                                file_delivery=self._file_delivery,
+                                approval_id=record.approval_id,
+                                data_dir=str(self._settings.data_dir),
+                            )
+                            self._pending_tools.update(
+                                record.id,
+                                "succeeded"
+                                if outcome.status == "ok"
+                                else "awaiting_review"
+                                if outcome.status == "error" and outcome.result is None
+                                else "failed",
+                                result=self._tool_loop.result_payload(outcome),
+                                error=None if outcome.status == "ok" else outcome.message,
+                            )
+                            if outcome.status != "ok" and self._approvals:
+                                self._approvals.invalidate(record.approval_code)
+                            return outcome
+
+                        worker = asyncio.create_task(execute_and_record(pending))
+                        cancelled = False
+                        while not worker.done():
+                            try:
+                                await asyncio.shield(worker)
+                            except asyncio.CancelledError:
+                                cancelled = True
+                        outcome = worker.result()
+                        if cancelled:
+                            raise asyncio.CancelledError
+                        ok = outcome.status == "ok"
+                        status, detail = "succeeded" if ok else "failed", outcome.message
+                        completed.append((pending, outcome))
+            else:
+                resolution = self._approvals.resolve_once(
+                    code,
+                    session_id=session_id,
+                    expected_scope=item.scope,
+                    grant_scope=grant_scope,
+                    channel=channel.channel,
+                    channel_target=channel.target,
+                )
+                ok, detail = resolution.ok, resolution.reason
+                status = "approved" if ok else "failed"
+                if ok:
+                    detail = f"已批准 {item.tool_name}（{item.risk}，{item.scope}）"
+            results.append(
+                {"code": code, "tool_name": item.tool_name, "status": status, "message": detail}
+            )
+            blocked = blocked or not ok
+        events = [
+            ChatEvent(
+                type="tool",
+                session_id=session_id,
+                extra={
+                    **result,
+                    "execution_status": result["status"],
+                    "status": "ok" if result["status"] == "succeeded" else result["status"],
+                },
+            )
+            for result in results
+        ]
+        reply = "\n".join(str(result["message"]) for result in results)
+        # File moves have a complete deterministic receipt, so no model call is necessary.
+        # Other successful batches resume once with every result, never once per approval.
+        if (
+            completed
+            and not blocked
+            and any(not record.tool_call_id.startswith("direct-move-") for record, _ in completed)
+            and not self._approvals.for_context(session_id, channel.channel, channel.target)
+        ):
+            messages = build_provider_messages(
+                self._store.list_messages(session_id),
+                load_soul(self._settings.soul_file),
+                self._settings.context_budget_chars,
+            )
+            for record, outcome in completed:
+                messages.extend(
+                    [
+                        ProviderMessage(
+                            role="assistant",
+                            content=record.assistant_content,
+                            tool_calls=[
+                                ToolCall(
+                                    id=record.tool_call_id,
+                                    name=record.tool_name,
+                                    arguments=record.params,
+                                )
+                            ],
+                        ),
+                        ProviderMessage(
+                            role="tool",
+                            name=record.tool_name,
+                            tool_call_id=record.tool_call_id,
+                            content=json.dumps(
+                                self._tool_loop.result_payload(outcome), ensure_ascii=False
+                            ),
+                        ),
+                    ]
+                )
+            events.extend(
+                [
+                    event
+                    async for event in self._tool_loop.continue_reply(
+                        session_id, messages, channel, receipt_prefix=reply
+                    )
+                ]
+            )
+            if events and events[-1].type == "done":
+                events[-1].extra = {
+                    **(events[-1].extra or {}),
+                    "results": results,
+                    "ok": True,
+                    "command_status": "approval_handled",
+                }
+                return events
+            reply += "\n操作结果如上；后续模型回复失败，请稍后继续。"
+        message = self._persist_assistant(session_id, reply)
+        events.append(
+            ChatEvent(
+                type="done",
+                session_id=session_id,
+                message_id=message.id,
+                text=reply,
+                extra={
+                    "results": results,
+                    "ok": not blocked,
+                    "command_status": "approval_invalid"
+                    if results and all(item["status"] == "invalid" for item in results)
+                    else "approval_handled"
+                    if not blocked
+                    else "approval_failed",
+                },
+            )
+        )
+        return events
+
     async def resume_approval(
         self,
         code: str,
         channel_context: ChannelContext,
         grant_scope: Literal["once", "session"] = "once",
     ) -> list[ChatEvent]:
-        """Approve, consume and continue a previously suspended tool call."""
-        if not all((self._pending_tools, self._approvals, self._policy, self._tool_executor)):
-            return [ChatEvent(type="error", message="审批恢复服务未配置")]
-        assert self._pending_tools is not None
-        assert self._approvals is not None
-        assert self._policy is not None
-        assert self._tool_executor is not None
-        pending = self._pending_tools.get_by_code(code)
-        if pending is None or pending.status != "pending":
+        pending = self._pending_tools.get_by_code(code) if self._pending_tools else None
+        if pending is None:
             return [ChatEvent(type="error", message="审批编号无效、已处理或无法恢复")]
-        if pending.channel != channel_context.channel or (
-            pending.channel_target and pending.channel_target != channel_context.target
-        ):
-            return [ChatEvent(type="error", message="审批编号不属于当前渠道或接收人")]
-        if params_digest(pending.params) != pending.params_digest:
-            self._pending_tools.update(pending.id, "failed", error="参数摘要不匹配")
-            return [ChatEvent(type="error", message="待执行参数校验失败")]
-
-        decision = self._policy.evaluate(pending.tool_name)
-        expected_scope = "session" if decision.mode is ApprovalMode.SESSION else "once"
-        resolution = self._approvals.approve(
-            code,
-            session_id=pending.session_id,
-            expected_scope=expected_scope,
-            grant_scope=grant_scope,
-            channel=pending.channel,
-            channel_target=pending.channel_target,
-        )
-        if not resolution.ok:
-            return [ChatEvent(type="error", message=resolution.reason)]
-        outcome = await asyncio.to_thread(
-            self._tool_executor.execute,
-            pending.tool_name,
-            pending.params,
-            session_id=pending.session_id,
-            channel=pending.channel,
-            channel_target=pending.channel_target,
-            file_delivery=self._file_delivery,
-            approval_id=pending.approval_id,
-            data_dir=str(self._settings.data_dir),
-        )
-        result_payload = self._tool_loop.result_payload(outcome)
-        self._pending_tools.update(
-            pending.id,
-            "succeeded" if outcome.status == "ok" else "failed",
-            result=result_payload,
-            error=None if outcome.status == "ok" else outcome.message,
+        return await self.decide_approvals(
+            [code], pending.session_id, channel_context, grant_scope=grant_scope
         )
 
-        history = self._store.list_messages(pending.session_id)
-        messages = build_provider_messages(
-            history,
-            load_soul(self._settings.soul_file),
-            self._settings.context_budget_chars,
+    def operation_status(self, session_id: str, channel: ChannelContext) -> str | None:
+        records = (
+            self._pending_tools.for_context(session_id, channel.channel, channel.target)
+            if self._pending_tools
+            else []
         )
-        from whitenight.models.base import ToolCall
-
-        messages.extend(
-            [
-                ProviderMessage(
-                    role="assistant",
-                    content=pending.assistant_content,
-                    tool_calls=[
-                        ToolCall(
-                            id=pending.tool_call_id,
-                            name=pending.tool_name,
-                            arguments=pending.params,
-                        )
-                    ],
-                ),
-                ProviderMessage(
-                    role="tool",
-                    name=pending.tool_name,
-                    tool_call_id=pending.tool_call_id,
-                    content=json.dumps(result_payload, ensure_ascii=False),
-                ),
-            ]
+        if not records:
+            return None
+        pending = (
+            self._approvals.for_context(session_id, channel.channel, channel.target)
+            if self._approvals
+            else []
         )
-        events = [
-            ChatEvent(
-                type="tool",
-                session_id=pending.session_id,
-                extra={
-                    "tool_name": pending.tool_name,
-                    "status": outcome.status,
-                    "message": outcome.message,
-                },
+        if pending:
+            return (
+                "尚未执行，正在等待审批：\n"
+                + "\n".join(f"{item.params_summary}\n回复：同意 {item.code}" for item in pending)
+                + "\n也可以回复“全部同意”。"
             )
-        ]
-        events.extend(
-            [
-                event
-                async for event in self._tool_loop.continue_reply(
-                    pending.session_id, messages, channel_context
-                )
-            ]
-        )
-        return events
+        record = records[0]
+        if record.status == "succeeded":
+            return str((record.result or {}).get("summary", "操作已完成。"))
+        if record.status == "running":
+            return "操作已领取，正在执行或等待核验结果；不会重复执行。"
+        return {
+            "expired": "审批已过期，尚未执行。请重新发起操作。",
+            "rejected": "操作已拒绝，未执行。",
+            "superseded": "旧操作已被新请求替代。",
+        }.get(record.status, f"操作未成功：{record.error or record.status}")
 
     async def reject_approval(self, code: str, channel_context: ChannelContext) -> str:
         if self._pending_tools is None or self._approvals is None:

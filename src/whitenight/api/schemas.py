@@ -27,6 +27,12 @@ class ApprovalAction(BaseModel):
     scope: Literal["once", "session"] = "once"
 
 
+class ApprovalBatchAction(BaseModel):
+    session_id: str
+    codes: list[str] = Field(min_length=1, max_length=1000)
+    allow: bool = True
+
+
 class ModelKeepAliveUpdate(BaseModel):
     keep_alive: str
 
